@@ -26,13 +26,7 @@ WHISPER_CLI = Path(os.environ.get("WHISPER_CLI", Path.home() / ".mori/bin/whispe
 WHISPER_MODEL = Path(os.environ.get("WHISPER_MODEL", Path.home() / ".mori/models/ggml-small.bin"))
 WORK = Path.home() / "voice-loop/tmp"
 
-# ponytail: 只切句末標點就夠，CosyVoice 一句一句吐比較穩；長逗號句先不管
-SENT_RE = re.compile(r"(?<=[。!?！？;；])\s*")
 PAREN_RE = re.compile(r"[(（\[][^)）\]]{0,6}[)）\]]")
-
-
-def split_sentences(text):
-    return [p.strip() for p in SENT_RE.split(text) if p.strip()]
 
 
 def clean_stt(text):
@@ -73,7 +67,6 @@ def ask_llm(question, model, max_chars):
 
 
 def selfcheck():
-    assert split_sentences("一句。二句！三句？\n\n四句") == ["一句。", "二句！", "三句？", "四句"]
     assert clean_stt(" （音樂） 今天天氣如何？ ") == "今天天氣如何？"
     assert clean_stt("(掌聲)好的") == "好的"
     assert clean_stt("這是（一個很長很長很長的東西）保留") == "這是（一個很長很長很長的東西）保留"
@@ -95,8 +88,11 @@ def main():
         return selfcheck()
 
     WORK.mkdir(parents=True, exist_ok=True)
-    import logging  # ponytail: CosyVoice 的 INFO 洗版，只留警告
-    logging.basicConfig(level=logging.WARNING, force=True)
+    import logging
+    # CosyVoice 的 INFO 與 tqdm 進度條會把畫面洗掉；「合成文字比參考文字短」那個
+    # WARNING 在這個用法下必然會出現（回答就是比參考音短），一起壓掉
+    logging.basicConfig(level=logging.ERROR, force=True)
+    os.environ.setdefault("TQDM_DISABLE", "1")
     sys.path += [str(COSYVOICE / "third_party/Matcha-TTS"), str(COSYVOICE)]
     import onnxruntime
     # ponytail: 8G 顯存塞不下 onnx CUDA EP ＋ CosyVoice，把 onnx 逼回 CPU（它很小，慢不了多少）。
@@ -116,7 +112,6 @@ def main():
     print("載入 CosyVoice…", flush=True)
     t0 = time.time()
     cv = AutoModel(model_dir=str(MODEL_DIR), fp16=True)
-    gap = torch.zeros(1, int(cv.sample_rate * 0.3))
     print(f"好了（{time.time() - t0:.0f}s）。模型＝{args.model}　Ctrl-C 離開\n", flush=True)
 
     wav = Path(args.input) if args.input else WORK / "in.wav"
@@ -139,16 +134,18 @@ def main():
         answer = ask_llm(heard, args.model, args.max_chars)
         print(f"回答：{answer}　（{time.time() - t0:.1f}s）", flush=True)
 
+        # ponytail: 整段一次合成,不切句。回答本來就只有幾十個字,
+        # 切得越碎離參考文字越遠,CosyVoice 的 clone 品質越差
         t0 = time.time()
-        pieces = []
-        for sent in split_sentences(answer) or [answer]:
+        pieces = [
+            j["tts_speech"]
             for j in cv.inference_zero_shot(
-                sent,
+                answer,
                 f"You are a helpful assistant.<|endofprompt|>{ref_text or heard}",
                 ref_wav or str(wav),
                 stream=False,
-            ):
-                pieces += [j["tts_speech"], gap]
+            )
+        ]
         torchaudio.save(str(out), torch.cat(pieces, dim=1), cv.sample_rate)
         print(f"合成 {time.time() - t0:.1f}s，播放中…\n", flush=True)
         subprocess.run(["paplay", str(out)])

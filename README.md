@@ -99,6 +99,11 @@ Narrator」產生的，放在這裡只供**跑通流程的示範**。拿它 clon
 - 錄太短（少於一秒）clone 出來的聲音會不穩，講完整一句再放開。
 - 啟動時 wetext 從 modelscope 抓檔案會 403、印「no frontend is avaliable」，不影響合成。
 - 參考音的**語氣神態也會被 clone**。拿 TTS 合成音當參考，輸出就是機器人唸稿腔。
+- **回答比參考音短的時候 clone 品質會掉**，CosyVoice 會印
+  `too short than prompt text, this may lead to bad performance`。所以程式整段一次合成、
+  不切句（切得越碎離參考文字越遠）。這個警告在這種用法下必然出現，已經連同 tqdm 進度條
+  一起壓掉；想看回來就把 `logging.basicConfig` 那行改回 `WARNING`、拿掉 `TQDM_DISABLE`。
+  真的很在意品質，就講長一點的句子當樣本。
 
 ## 授權 License
 
