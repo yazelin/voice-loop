@@ -2,7 +2,7 @@
 
 對著麥克風講話，AI 用**你自己的聲音**回答你。
 
-一輪約 9 秒（實測 2.4s ＋ 3.5s ＋ 3.3s）：
+一輪約 4 到 9 秒（STT 約 0.6s ＋ LLM 0.4 到 2s ＋ 合成 2 到 6s）：
 
 ```
 麥克風 ──► whisper.cpp（本機 GPU）──► llmshare（雲端 LLM）──► CosyVoice3（本機 GPU）──► paplay
@@ -46,6 +46,16 @@ export GROQ_API_KEY=gsk_...
 
 Groq 那條走 OpenAI 相容的 `/openai/v1/chat/completions`，`reasoning_effort` 設成 `low`
 （gpt-oss 會先想再答，想太久就失去用 Groq 的意義）。
+
+**實測（2026-08-26，同樣三個問題各問一次）**：
+
+| 後端 | 平均 | 最慢 | 答起來的樣子 |
+|---|---|---|---|
+| Groq `openai/gpt-oss-120b` | 0.37s | 0.44s | 準確但乾，像查資料 |
+| llmshare `deepseek-v4-flash:0731` | 1.74s | 2.01s | 慢五倍，但口語、有溫度，比較像在聊天 |
+
+要反應快選 Groq，要講話像人選 llmshare。整輪的另外兩段（STT 約 0.6 秒、合成 2 到 6 秒）
+兩邊一樣，所以換 Groq 大概省一秒多。
 
 ### 路徑覆寫
 
