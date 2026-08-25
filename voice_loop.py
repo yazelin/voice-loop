@@ -36,7 +36,7 @@ LLM_URL = {
 DEFAULT_MODEL = {
     "llmshare": "deepseek-v4-flash:0731",
     "groq": "openai/gpt-oss-120b",
-    "local": "qwen3-1.7b",  # llama-server 只載一個模型，這個名字只是標籤
+    "local": "qwen3.5-2b",  # llama-server 只載一個模型，這個名字只是標籤
 }
 
 PAREN_RE = re.compile(r"[(（\[][^)）\]]{0,6}[)）\]]")
@@ -51,8 +51,7 @@ def clean_stt(text):
 
 
 def record(out_wav, device):
-    """按 Enter 開始、再按 Enter 停止。回傳是否錄到東西。"""
-    input("按 Enter 開始錄音…")
+    """開始錄，按 Enter 停止。回傳是否錄到東西。"""
     cmd = ["arecord", "-q", "-f", "S16_LE", "-r", "16000", "-c", "1", str(out_wav)]
     if device:
         cmd[1:1] = ["-D", device]
@@ -74,6 +73,26 @@ def transcribe(wav):
         # 顯存被別的模型佔滿時 whisper 會在這裡掛掉，吞掉錯誤會看起來像「沒聽到」
         print(f"whisper 失敗（exit {r.returncode}）：{r.stderr.strip()[-200:]}", flush=True)
     return clean_stt(r.stdout)
+
+
+COMMANDS = {
+    ":voice": "換參考聲音，例：:voice assets/jinn-tiffy-10s.wav",
+    ":record": "重錄一段當參考聲音",
+    ":backend": "換 LLM 後端：:backend groq / local / llmshare",
+    ":len": "回答字數上限，例：:len 30",
+    ":say": "不錄音，直接打字問，例：:say 今天天氣如何",
+    ":help": "看這份清單",
+    ":q": "離開",
+}
+
+
+def parse_command(line):
+    """回傳 (指令, 參數)；不是指令就回 (None, 原字串)。"""
+    line = line.strip()
+    if not line.startswith(":"):
+        return None, line
+    name, _, arg = line.partition(" ")
+    return name, arg.strip()
 
 
 def build_prompt(question, max_chars):
@@ -135,6 +154,11 @@ def selfcheck():
     assert clean_stt("是繁體中文的句子。") == ""      # 錄到靜音時 whisper 的 prompt 回音
     assert clean_stt(STT_HINT) == ""
     assert clean_stt("以下是繁體中文的句子。真的嗎？") == "以下是繁體中文的句子。真的嗎？"
+    assert parse_command("  ") == (None, "")
+    assert parse_command("你好") == (None, "你好")
+    assert parse_command(":len 30") == (":len", "30")
+    assert parse_command(":record") == (":record", "")
+    assert parse_command(":say 今天 天氣 如何") == (":say", "今天 天氣 如何")
     print("selfcheck ok")
 
 
@@ -185,6 +209,7 @@ def main():
     if args.record_voice is not None:
         ref_wav = str(Path(args.record_voice).expanduser()) if args.record_voice else str(WORK / "voice.wav")
         print("先錄一段當這場的參考音：講十到三十秒，自然講話不要唸稿。")
+        input("按 Enter 開始錄音…")
         if not record(Path(ref_wav), args.device):
             sys.exit("沒錄到聲音，重跑一次。")
         ref_text = transcribe(Path(ref_wav))
@@ -208,22 +233,98 @@ def main():
     cv = AutoModel(model_dir=str(MODEL_DIR), fp16=True)
     # 參考音固定的話，它的前處理只要算一次就好（10 秒參考音每輪要 1.4 秒）。
     # 預設模式每輪的參考音都不一樣（就是你剛講那句），沒得快取。
-    spk_id = ""
+    # 參考音固定的話聲紋只算一次；換聲音時重算一次覆蓋掉，省得重開整支程式
+    state = {"wav": ref_wav, "text": ref_text, "spk": "", "backend": args.backend,
+             "model": model, "len": args.max_chars}
+
+    def use_reference(wav_path, text):
+        state["wav"], state["text"], state["spk"] = wav_path, text, "fixed"
+        cv.add_zero_shot_spk(f"You are a helpful assistant.<|endofprompt|>{text}", wav_path, "fixed")
+
     if ref_wav:
-        spk_id = "fixed"
-        cv.add_zero_shot_spk(f"You are a helpful assistant.<|endofprompt|>{ref_text}", ref_wav, spk_id)
-    print(f"好了（{time.time() - t0:.0f}s）。{args.backend} / {model}　Ctrl-C 離開\n", flush=True)
+        use_reference(ref_wav, ref_text)
+    print(f"好了（{time.time() - t0:.0f}s）。{state['backend']} / {state['model']}"
+          f"　輸入 :help 看指令，:q 離開\n", flush=True)
 
     wav = Path(args.input) if args.input else WORK / "in.wav"
     out = WORK / "out.wav"
     while True:
-        if not args.input and not record(wav, args.device):
-            print("沒錄到聲音，再試一次。\n")
-            continue
+        typed = ""
+        if not args.input:
+            name, arg = parse_command(input("按 Enter 錄音，或輸入指令（:help）…"))
+            if name == ":q":
+                return
+            if name == ":help":
+                for k, v in COMMANDS.items():
+                    print(f"  {k:9s} {v}")
+                print()
+                continue
+            if name == ":len":
+                if arg.isdigit() and int(arg) > 0:
+                    state["len"] = int(arg)
+                    print(f"回答字數上限改成 {state['len']}\n")
+                else:
+                    print("要給正整數，例：:len 30\n")
+                continue
+            if name == ":backend":
+                if arg in DEFAULT_MODEL:
+                    state["backend"], state["model"] = arg, DEFAULT_MODEL[arg]
+                    print(f"後端改成 {arg} / {state['model']}\n")
+                else:
+                    print(f"只能是 {' / '.join(DEFAULT_MODEL)}\n")
+                continue
+            if name == ":voice":
+                path = Path(arg).expanduser() if arg else None
+                if not path or not path.exists():
+                    print("找不到那個檔案\n")
+                    continue
+                sidecar = path.with_suffix(".txt")
+                text = sidecar.read_text(encoding="utf-8").strip() if sidecar.exists() else transcribe(path)
+                if not text:
+                    print("聽不出參考音的內容，換一個檔案\n")
+                    continue
+                use_reference(str(path), text)
+                print(f"參考聲音改成 {path}\n參考文字：{text}\n")
+                continue
+            if name == ":record":
+                ref = WORK / "voice.wav"
+                print("講十到三十秒，自然講話不要唸稿。")
+                input("按 Enter 開始錄音…")
+                if not record(ref, args.device):
+                    print("沒錄到聲音\n")
+                    continue
+                text = transcribe(ref)
+                if not text:
+                    print("聽不出內容，再錄一次\n")
+                    continue
+                use_reference(str(ref), text)
+                print(f"參考聲音換成剛剛那段\n參考文字：{text}\n")
+                continue
+            if name == ":say":
+                if not arg:
+                    print("要給問題，例：:say 今天天氣如何\n")
+                    continue
+                if not state["wav"]:
+                    print("打字模式沒有當下的錄音可以當聲音樣本，先 :record 或 :voice\n")
+                    continue
+                typed = arg
+            elif name is not None:
+                print(f"沒有 {name} 這個指令，:help 看清單\n")
+                continue
+            elif not record(wav, args.device):
+                print("沒錄到聲音，再試一次。\n")
+                continue
 
-        t0 = time.time()
-        heard = transcribe(wav)
-        print(f"你說：{heard}　（{time.time() - t0:.1f}s）", flush=True)
+        turn_start = time.time()  # 從送進 whisper 算到播放前，就是使用者感覺到的等待
+        if typed:
+            heard = typed
+            stt = 0.0
+            print(f"你問：{heard}", flush=True)
+        else:
+            t0 = time.time()
+            heard = transcribe(wav)
+            stt = time.time() - t0
+            print(f"你說：{heard}　（{stt:.1f}s）", flush=True)
         if not heard:
             print("聽不出內容，再試一次。\n")
             if args.input:
@@ -231,8 +332,9 @@ def main():
             continue
 
         t0 = time.time()
-        answer = ask_llm(heard, args.backend, model, args.max_chars, args.llm_url)
-        print(f"回答：{answer}　（{time.time() - t0:.1f}s）", flush=True)
+        answer = ask_llm(heard, state["backend"], state["model"], state["len"], args.llm_url)
+        llm = time.time() - t0
+        print(f"回答：{answer}　（{llm:.1f}s）", flush=True)
 
         # ponytail: 整段一次合成,不切句。回答本來就只有幾十個字,
         # 切得越碎離參考文字越遠,CosyVoice 的 clone 品質越差
@@ -241,14 +343,18 @@ def main():
             j["tts_speech"]
             for j in cv.inference_zero_shot(
                 answer,
-                f"You are a helpful assistant.<|endofprompt|>{ref_text or heard}",
-                ref_wav or str(wav),
-                zero_shot_spk_id=spk_id,
+                f"You are a helpful assistant.<|endofprompt|>{state['text'] or heard}",
+                state["wav"] or str(wav),
+                zero_shot_spk_id=state["spk"],
                 stream=False,
             )
         ]
-        torchaudio.save(str(out), torch.cat(pieces, dim=1), cv.sample_rate)
-        print(f"合成 {time.time() - t0:.1f}s，播放中…\n", flush=True)
+        audio = torch.cat(pieces, dim=1)
+        torchaudio.save(str(out), audio, cv.sample_rate)
+        tts = time.time() - t0
+        print(f"合計 {time.time() - turn_start:.1f}s"
+              f"（STT {stt:.1f} ＋ LLM {llm:.1f} ＋ 合成 {tts:.1f}）"
+              f"　語音長 {audio.shape[1] / cv.sample_rate:.1f}s，播放中…\n", flush=True)
         subprocess.run(["paplay", str(out)])
         if args.input:
             return
