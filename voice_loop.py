@@ -123,7 +123,8 @@ def main():
     ap.add_argument("--device", default="", help="arecord 裝置，如 plughw:1,0；留空用系統預設")
     ap.add_argument("--max-chars", type=int, default=60, help="回答字數上限")
     ap.add_argument("--voice", help="固定的 clone 參考音 wav；不給就用你每次講的那句")
-    ap.add_argument("--voice-text", help="參考音的逐字稿；不給就用 whisper 轉一次")
+    ap.add_argument("--voice-text", help="參考音的逐字稿；不給就讀旁邊的同名 .txt，"
+                                         "沒有的話用 whisper 轉一次")
     ap.add_argument("--input", help="拿現成 wav 代替麥克風，跑一輪就結束")
     ap.add_argument("--selfcheck", action="store_true")
     args = ap.parse_args()
@@ -150,7 +151,10 @@ def main():
     ref_wav = ref_text = None
     if args.voice:
         ref_wav = str(Path(args.voice).expanduser())
-        ref_text = args.voice_text or transcribe(Path(ref_wav))
+        sidecar = Path(ref_wav).with_suffix(".txt")  # 參考音旁邊有同名 .txt 就直接用
+        ref_text = args.voice_text or (
+            sidecar.read_text(encoding="utf-8").strip() if sidecar.exists() else transcribe(Path(ref_wav))
+        )
         print(f"參考聲音：{ref_wav}\n參考文字：{ref_text}")
 
     print("載入 CosyVoice…", flush=True)

@@ -83,7 +83,7 @@ export WHISPER_MODEL=/somewhere/ggml-small.bin
 ~/CosyVoice/.venv/bin/python voice_loop.py --backend groq
 ~/CosyVoice/.venv/bin/python voice_loop.py --model glm-5.2
 
-# 固定用別的聲音回答（不給 --voice-text 就自動轉一次逐字稿）
+# 固定用附的 Tiffy 聲音回答（逐字稿自動讀同名 .txt）
 ~/CosyVoice/.venv/bin/python voice_loop.py --voice assets/jinn-tiffy-10s.wav
 
 # 指定麥克風（arecord -l 查裝置編號）
@@ -124,14 +124,22 @@ python3 voice_loop.py --selfcheck
 
 ## 附的範例聲音
 
-`assets/jinn-tiffy-10s.wav`（＋ 同名 `.txt` 逐字稿）是一段十秒的台灣中文旁白，
-用來示範 `--voice`：
+repo 內附了 `assets/jinn-tiffy-10s.wav`，一段十秒的台灣中文旁白（暱稱 Tiffy）。用它回答：
 
 ```bash
-~/CosyVoice/.venv/bin/python voice_loop.py \
-  --voice assets/jinn-tiffy-10s.wav \
-  --voice-text "$(cat assets/jinn-tiffy-10s.txt)"
+cd ~/voice-loop
+~/CosyVoice/.venv/bin/python voice_loop.py --voice assets/jinn-tiffy-10s.wav
 ```
+
+逐字稿不必自己給。`--voice` 會先找**同名的 `.txt`**（這裡是 `assets/jinn-tiffy-10s.txt`），
+找不到才用 whisper 轉一次。要換成自己的聲音，就把 wav 和同名 txt 一起放進去：
+
+```bash
+cp 我的聲音.wav 我的聲音.txt assets/
+~/CosyVoice/.venv/bin/python voice_loop.py --voice assets/我的聲音.wav
+```
+
+給了 `--voice` 就會自動快取聲紋，每輪合成少 1.5 秒（見上面「合成要更快」）。
 
 **授權注意**：這段音是 2026 年用 ElevenLabs 的商用聲線「Tiffy - Taiwanese Bilingual
 Narrator」產生的，放在這裡只供**跑通流程的示範**。拿它 clone 出來的語音要對外發佈
