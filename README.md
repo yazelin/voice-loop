@@ -24,13 +24,28 @@ bash setup.sh
 |---|---|---|---|
 | **CosyVoice3 0.5B** | TTS ＋ zero-shot voice clone | 本機 `~/CosyVoice`，走 **GPU** | 約 12 GB（程式 ＋ 5.1 GB 模型）。載入吃約 3.2 GiB 顯存，RTF 約 0.7 |
 | **whisper.cpp** | 語音轉文字 | 本機 `~/.mori/bin/whisper-cli` ＋ `ggml-small.bin`，走 **GPU** | 要編 CUDA 版（`-DGGML_CUDA=ON`），不然會掉回 CPU |
-| **llmshare** | 產生回答 | CLI，**打雲端 API** | 預設模型 `deepseek-v4-flash:0731`。金鑰放環境變數 `LLMSHARE_API_KEY` |
+| **llmshare** 或 **Groq** | 產生回答 | **打雲端 API**，二選一 | 見下面「換 LLM 後端」 |
 | arecord / paplay | 錄音、播放 | `alsa-utils`、`pulseaudio-utils` | |
 | ffmpeg | 音檔處理 | | |
 
-整條線裡**只有 llmshare 會連外網**，STT 與 TTS 都在本機 GPU。
-llmshare 是共享閘道 CLI，安裝與金鑰見 <https://github.com/yazelin/duotify-ollama-cloud-setup>；
-`llmshare models` 可以看全部模型，換模型用 `--model`。
+整條線裡**只有產生回答那一段會連外網**，STT 與 TTS 都在本機 GPU。
+
+### 換 LLM 後端
+
+`--backend` 二選一，兩邊都不給 `--model` 就用各自的預設：
+
+| `--backend` | 預設模型 | 要什麼 | 怎麼裝 |
+|---|---|---|---|
+| `llmshare`（預設） | `deepseek-v4-flash:0731` | `llmshare` CLI ＋ 環境變數 `LLMSHARE_API_KEY` | <https://github.com/yazelin/duotify-ollama-cloud-setup>；`llmshare models` 看全部模型 |
+| `groq` | `openai/gpt-oss-120b` | 環境變數 `GROQ_API_KEY` | <https://console.groq.com/keys>，不必裝任何套件（走 stdlib 的 urllib） |
+
+```bash
+export GROQ_API_KEY=gsk_...
+~/CosyVoice/.venv/bin/python voice_loop.py --backend groq
+```
+
+Groq 那條走 OpenAI 相容的 `/openai/v1/chat/completions`，`reasoning_effort` 設成 `low`
+（gpt-oss 會先想再答，想太久就失去用 Groq 的意義）。
 
 ### 路徑覆寫
 
@@ -54,7 +69,8 @@ export WHISPER_MODEL=/somewhere/ggml-small.bin
 按 Enter 開始錄音，再按 Enter 停止，然後等它回答。Ctrl-C 離開。
 
 ```bash
-# 換 LLM
+# 換 LLM 後端與模型
+~/CosyVoice/.venv/bin/python voice_loop.py --backend groq
 ~/CosyVoice/.venv/bin/python voice_loop.py --model glm-5.2
 
 # 固定用別的聲音回答（不給 --voice-text 就自動轉一次逐字稿）
@@ -97,6 +113,8 @@ Narrator」產生的，放在這裡只供**跑通流程的示範**。拿它 clon
   剩不到 4.2 GiB 就先關東西。
 - whisper 對中文預設吐簡體，靠 `--prompt "以下是繁體中文的句子。"` 壓回正體，不是百分之百。
 - 錄太短（少於一秒）clone 出來的聲音會不穩，講完整一句再放開。
+- **Groq 會擋 urllib 的預設 User-Agent**，回 `403 error code 1010`（那是 Cloudflare 不是 Groq）。
+  程式送了自己的 `User-Agent`，別把那行拿掉。
 - 啟動時 wetext 從 modelscope 抓檔案會 403、印「no frontend is avaliable」，不影響合成。
 - 參考音的**語氣神態也會被 clone**。拿 TTS 合成音當參考，輸出就是機器人唸稿腔。
 - **回答比參考音短的時候 clone 品質會掉**，CosyVoice 會印
