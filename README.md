@@ -132,11 +132,17 @@ cd ~/voice-loop
 ```
 
 逐字稿不必自己給。`--voice` 會先找**同名的 `.txt`**（這裡是 `assets/jinn-tiffy-10s.txt`），
-找不到才用 whisper 轉一次。要換成自己的聲音，就把 wav 和同名 txt 一起放進去：
+找不到才用 whisper 轉一次。
+
+Tiffy 只是其中一個選項，不會被蓋掉。`assets/` 想放幾支就放幾支，一支 wav 配一支同名 txt，
+每次跑再用 `--voice` 挑要哪一支：
 
 ```bash
-cp 我的聲音.wav 我的聲音.txt assets/
-~/CosyVoice/.venv/bin/python voice_loop.py --voice assets/我的聲音.wav
+cp 我的聲音.wav 我的聲音.txt assets/     # 多一個選項，Tiffy 還在
+
+~/CosyVoice/.venv/bin/python voice_loop.py --voice assets/jinn-tiffy-10s.wav   # Tiffy
+~/CosyVoice/.venv/bin/python voice_loop.py --voice assets/我的聲音.wav          # 你自己
+~/CosyVoice/.venv/bin/python voice_loop.py                                     # 不挑,用你當下講的那句
 ```
 
 給了 `--voice` 就會自動快取聲紋，每輪合成少 1.5 秒（見上面「合成要更快」）。
