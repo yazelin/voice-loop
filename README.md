@@ -320,8 +320,14 @@ Narrator」產生的，放在這裡只供**跑通流程的示範**。拿它 clon
 - **Groq 會擋 urllib 的預設 User-Agent**，回 `403 error code 1010`（那是 Cloudflare 不是 Groq）。
   程式送了自己的 `User-Agent`，別把那行拿掉。
 - **whisper 被擠掉的時候會 SIGSEGV**（`exit -11`，有時是 `exit 10`），畫面上不會出現 OOM 字樣。
-  程式原本吞掉 stderr，畫面上只會看到「你說：」後面空白，看起來像沒聽到你講話。
-  現在會把 whisper 的 exit code 和 stderr 印出來，別再把它藏起來。
+  更糟的是它 abort 前會把 **GDB 的 backtrace 印到 stdout**，所以只看 exit code 卻照用 stdout，
+  那整串 backtrace 會被當成你講的話送進 LLM（真的發生過，模型認真回答了那段 backtrace）。
+  現在失敗一律回空字串，並把 exit code 與 stderr 印出來。
+- **mori 的 whisper-server 若在跑就借用它**（`ps` 裡撈 `--port`）。它的模型已經在顯存裡，
+  借用等於白賺：省下自己那份約 900 MiB，STT 也從 0.82 秒變 0.37 秒（不必每次重載模型）。
+  它沒在跑才退回 `whisper-cli`。
+- **開始載入前會先看顯存夠不夠**，不夠就直接講，免得等 20 秒載完才在合成那步炸掉。
+  真的炸了也會被接住，不會把整場對話打掉。
 - **`pkill -f "llama-server..."` 會把自己殺掉**：執行這行的 shell，它自己的 cmdline 就含有
   `llama-server` 這串字，`pkill -f` 比對得到。要用連接埠找 PID：
   `ss -ltnp | awk '/127.0.0.1:8080/ {print $NF}' | grep -o 'pid=[0-9]*' | cut -d= -f2`。

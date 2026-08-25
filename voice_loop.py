@@ -62,7 +62,31 @@ def record(out_wav, device):
     return out_wav.exists() and out_wav.stat().st_size > 16000  # 約 0.5 秒以上
 
 
-def transcribe(wav):
+def find_whisper_server():
+    """mori 的 whisper-server 若在跑就借用它：模型已經在顯存裡，我們不必再載一份。
+    回傳 inference 網址，沒有就回 None。"""
+    ps = subprocess.run(["ps", "-eo", "args"], capture_output=True, text=True).stdout
+    for line in ps.splitlines():
+        if "whisper-server" in line and "--port" in line and "ps -eo" not in line:
+            m = re.search(r"--port\s+(\d+)", line)
+            if m:
+                return f"http://127.0.0.1:{m.group(1)}/inference"
+    return None
+
+
+def transcribe(wav, server=None):
+    if server:
+        r = subprocess.run(
+            ["curl", "-s", "--max-time", "60", "-F", f"file=@{wav}", "-F", "language=zh",
+             "-F", "response_format=json", "-F", f"prompt={STT_HINT}", server],
+            capture_output=True, text=True,
+        )
+        try:
+            return clean_stt(" ".join(json.loads(r.stdout)["text"].split()))
+        except (ValueError, KeyError):
+            print(f"whisper-server 回了看不懂的東西：{r.stdout[:120]}", flush=True)
+            return ""
+
     env = {**os.environ, "LD_LIBRARY_PATH": str(WHISPER_CLI.parent)}
     r = subprocess.run(
         [str(WHISPER_CLI), "-m", str(WHISPER_MODEL), "-l", "zh", "-nt", "-np",
@@ -70,9 +94,33 @@ def transcribe(wav):
         capture_output=True, text=True, env=env,
     )
     if r.returncode != 0:
-        # 顯存被別的模型佔滿時 whisper 會在這裡掛掉，吞掉錯誤會看起來像「沒聽到」
+        # 顯存不夠時 whisper 是 abort，而且會把 GDB backtrace 印到 stdout。
+        # 只看 exit code 卻照用 stdout，那串 backtrace 就會被當成使用者講的話送進 LLM。
         print(f"whisper 失敗（exit {r.returncode}）：{r.stderr.strip()[-200:]}", flush=True)
+        return ""
     return clean_stt(r.stdout)
+
+
+def gpu_free_mib():
+    r = subprocess.run(["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"],
+                       capture_output=True, text=True)
+    try:
+        return int(r.stdout.split()[0])
+    except (ValueError, IndexError):
+        return None
+
+
+def vram_check(stt_is_shared):
+    """CosyVoice 載入要 3490 MiB、推論尖峰再多約 900。whisper 自己跑的話還要約 900。
+    不夠就先講，免得等 20 秒載完才在合成那一步炸掉。"""
+    free = gpu_free_mib()
+    if free is None:
+        return
+    need = 4400 if stt_is_shared else 5300
+    print(f"顯存剩 {free} MiB（這一輪大約需要 {need}）")
+    if free < need:
+        print("  不夠。省顯存的順序：關 rustdesk（約 240）、關幾個瀏覽器分頁、\n"
+              "  llama-server 的 -ngl 調小、少接一台外接螢幕。詳見 README「地端 LLM」。")
 
 
 COMMANDS = {
@@ -190,6 +238,12 @@ def main():
 
 
     WORK.mkdir(parents=True, exist_ok=True)
+
+    stt_server = find_whisper_server()
+    if stt_server:
+        print(f"借用已經在跑的 whisper-server（{stt_server}），不另外佔顯存。")
+    vram_check(bool(stt_server))
+
     import logging
     # CosyVoice 的 INFO 與 tqdm 進度條會把畫面洗掉；「合成文字比參考文字短」那個
     # WARNING 在這個用法下必然會出現（回答就是比參考音短），一起壓掉
@@ -212,7 +266,7 @@ def main():
         input("按 Enter 開始錄音…")
         if not record(Path(ref_wav), args.device):
             sys.exit("沒錄到聲音，重跑一次。")
-        ref_text = transcribe(Path(ref_wav))
+        ref_text = transcribe(Path(ref_wav), stt_server)
         if not ref_text:
             sys.exit("聽不出參考音的內容，重錄一次（安靜一點、講完整的句子）。")
         print(f"參考文字：{ref_text}")
@@ -223,7 +277,7 @@ def main():
         ref_wav = str(Path(args.voice).expanduser())
         sidecar = Path(ref_wav).with_suffix(".txt")  # 參考音旁邊有同名 .txt 就直接用
         ref_text = args.voice_text or (
-            sidecar.read_text(encoding="utf-8").strip() if sidecar.exists() else transcribe(Path(ref_wav))
+            sidecar.read_text(encoding="utf-8").strip() if sidecar.exists() else transcribe(Path(ref_wav), stt_server)
         )
         print(f"參考聲音：{ref_wav}\n參考文字：{ref_text}")
 
@@ -279,7 +333,7 @@ def main():
                     print("找不到那個檔案\n")
                     continue
                 sidecar = path.with_suffix(".txt")
-                text = sidecar.read_text(encoding="utf-8").strip() if sidecar.exists() else transcribe(path)
+                text = sidecar.read_text(encoding="utf-8").strip() if sidecar.exists() else transcribe(path, stt_server)
                 if not text:
                     print("聽不出參考音的內容，換一個檔案\n")
                     continue
@@ -293,7 +347,7 @@ def main():
                 if not record(ref, args.device):
                     print("沒錄到聲音\n")
                     continue
-                text = transcribe(ref)
+                text = transcribe(ref, stt_server)
                 if not text:
                     print("聽不出內容，再錄一次\n")
                     continue
@@ -322,7 +376,7 @@ def main():
             print(f"你問：{heard}", flush=True)
         else:
             t0 = time.time()
-            heard = transcribe(wav)
+            heard = transcribe(wav, stt_server)
             stt = time.time() - t0
             print(f"你說：{heard}　（{stt:.1f}s）", flush=True)
         if not heard:
@@ -339,16 +393,24 @@ def main():
         # ponytail: 整段一次合成,不切句。回答本來就只有幾十個字,
         # 切得越碎離參考文字越遠,CosyVoice 的 clone 品質越差
         t0 = time.time()
-        pieces = [
-            j["tts_speech"]
-            for j in cv.inference_zero_shot(
-                answer,
-                f"You are a helpful assistant.<|endofprompt|>{state['text'] or heard}",
-                state["wav"] or str(wav),
-                zero_shot_spk_id=state["spk"],
-                stream=False,
-            )
-        ]
+        try:
+            pieces = [
+                j["tts_speech"]
+                for j in cv.inference_zero_shot(
+                    answer,
+                    f"You are a helpful assistant.<|endofprompt|>{state['text'] or heard}",
+                    state["wav"] or str(wav),
+                    zero_shot_spk_id=state["spk"],
+                    stream=False,
+                )
+            ]
+        except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
+            # 顯存不夠是最常見的失敗，別讓一次失敗把整場對話打掉
+            torch.cuda.empty_cache()
+            print(f"合成失敗：{str(e).splitlines()[0][:120]}")
+            print(f"  顯存剩 {gpu_free_mib()} MiB。關掉 rustdesk 或幾個瀏覽器分頁再試，"
+                  f"或 :backend groq 把 llama-server 的顯存讓出來。\n")
+            continue
         audio = torch.cat(pieces, dim=1)
         torchaudio.save(str(out), audio, cv.sample_rate)
         tts = time.time() - t0
