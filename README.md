@@ -174,6 +174,8 @@ Narrator」產生的，放在這裡只供**跑通流程的示範**。拿它 clon
 - 桌面本身就吃掉不少顯存（實測 Xorg 961 MiB ＋ 瀏覽器分頁數百 MiB）。跑之前先看 `nvidia-smi`，
   剩不到 4.2 GiB 就先關東西。
 - whisper 對中文預設吐簡體，靠 `--prompt "以下是繁體中文的句子。"` 壓回正體，不是百分之百。
+- **錄到靜音時 whisper 會把那句 prompt 原樣吐回來**，看起來就像你真的講了那句話。程式把
+  等於 prompt 的轉寫結果當成沒聽到（`STT_HINT`），換了 prompt 的話那個守衛要跟著換。
 - 錄太短（少於一秒）clone 出來的聲音會不穩，講完整一句再放開。
 - **Groq 會擋 urllib 的預設 User-Agent**，回 `403 error code 1010`（那是 Cloudflare 不是 Groq）。
   程式送了自己的 `User-Agent`，別把那行拿掉。

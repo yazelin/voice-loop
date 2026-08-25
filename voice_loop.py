@@ -32,11 +32,14 @@ GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 DEFAULT_MODEL = {"llmshare": "deepseek-v4-flash:0731", "groq": "openai/gpt-oss-120b"}
 
 PAREN_RE = re.compile(r"[(（\[][^)）\]]{0,6}[)）\]]")
+# 餵給 whisper 的 initial prompt。錄到靜音時它會把這句原樣吐回來，要當成沒聽到
+STT_HINT = "以下是繁體中文的句子。"
 
 
 def clean_stt(text):
-    """whisper 常回（音樂）（掌聲）這種註記與前後空白，清掉。"""
-    return PAREN_RE.sub("", text).strip()
+    """whisper 常回（音樂）（掌聲）這種註記與前後空白，清掉；prompt 回音當成沒聽到。"""
+    text = PAREN_RE.sub("", text).strip()
+    return "" if text and text in STT_HINT else text
 
 
 def record(out_wav, device):
@@ -56,7 +59,7 @@ def transcribe(wav):
     env = {**os.environ, "LD_LIBRARY_PATH": str(WHISPER_CLI.parent)}
     out = subprocess.run(
         [str(WHISPER_CLI), "-m", str(WHISPER_MODEL), "-l", "zh", "-nt", "-np",
-         "--prompt", "以下是繁體中文的句子。", "-f", str(wav)],
+         "--prompt", STT_HINT, "-f", str(wav)],
         capture_output=True, text=True, env=env,
     ).stdout
     return clean_stt(out)
@@ -111,6 +114,9 @@ def selfcheck():
     assert clean_stt(" （音樂） 今天天氣如何？ ") == "今天天氣如何？"
     assert clean_stt("(掌聲)好的") == "好的"
     assert clean_stt("這是（一個很長很長很長的東西）保留") == "這是（一個很長很長很長的東西）保留"
+    assert clean_stt("是繁體中文的句子。") == ""      # 錄到靜音時 whisper 的 prompt 回音
+    assert clean_stt(STT_HINT) == ""
+    assert clean_stt("以下是繁體中文的句子。真的嗎？") == "以下是繁體中文的句子。真的嗎？"
     print("selfcheck ok")
 
 
