@@ -74,18 +74,35 @@ def find_whisper_server():
     return None
 
 
-def transcribe(wav, server=None):
-    if server:
-        r = subprocess.run(
-            ["curl", "-s", "--max-time", "60", "-F", f"file=@{wav}", "-F", "language=zh",
-             "-F", "response_format=json", "-F", f"prompt={STT_HINT}", server],
-            capture_output=True, text=True,
-        )
-        try:
-            return clean_stt(" ".join(json.loads(r.stdout)["text"].split()))
-        except (ValueError, KeyError):
-            print(f"whisper-server 回了看不懂的東西：{r.stdout[:120]}", flush=True)
-            return ""
+def _via_server(wav, server):
+    """(文字, 成功與否)。空字串但成功 = 真的沒聽到內容。"""
+    r = subprocess.run(
+        ["curl", "-s", "--max-time", "60", "-F", f"file=@{wav}", "-F", "language=zh",
+         "-F", "response_format=json", "-F", f"prompt={STT_HINT}", server],
+        capture_output=True, text=True,
+    )
+    try:
+        return clean_stt(" ".join(json.loads(r.stdout)["text"].split())), True
+    except (ValueError, KeyError):
+        return "", False
+
+
+def transcribe(wav, stt=None):
+    """stt 是可變的 {"url": ...}；server 中途被關掉就自己重找，找不到退回 whisper-cli。"""
+    if stt and stt.get("url"):
+        text, ok = _via_server(wav, stt["url"])
+        if ok:
+            return text
+        fresh = find_whisper_server()          # mori 可能重開了，port 會變
+        if fresh and fresh != stt["url"]:
+            text, ok = _via_server(wav, fresh)
+            if ok:
+                stt["url"] = fresh
+                print(f"whisper-server 換到 {fresh}", flush=True)
+                return text
+        stt["url"] = None
+        print("whisper-server 沒回應了（大概被關掉），改用本機 whisper-cli。"
+              "它要多吃約 900 MiB 顯存。", flush=True)
 
     env = {**os.environ, "LD_LIBRARY_PATH": str(WHISPER_CLI.parent)}
     r = subprocess.run(
@@ -256,10 +273,10 @@ def main():
 
     WORK.mkdir(parents=True, exist_ok=True)
 
-    stt_server = find_whisper_server()
-    if stt_server:
-        print(f"借用已經在跑的 whisper-server（{stt_server}），不另外佔顯存。")
-    vram_check(bool(stt_server))
+    stt = {"url": find_whisper_server()}
+    if stt["url"]:
+        print(f"借用已經在跑的 whisper-server（{stt['url']}），不另外佔顯存。")
+    vram_check(bool(stt["url"]))
 
     # 一定要在 import torch 之前設。顯存剩一千多卻配置不到一百 MiB 就是碎片化，
     # expandable_segments 讓配置器可以擴張既有區段，不必找連續空間。
@@ -287,7 +304,7 @@ def main():
         input("按 Enter 開始錄音…")
         if not record(Path(ref_wav), args.device):
             sys.exit("沒錄到聲音，重跑一次。")
-        ref_text = transcribe(Path(ref_wav), stt_server)
+        ref_text = transcribe(Path(ref_wav), stt)
         if not ref_text:
             sys.exit("聽不出參考音的內容，重錄一次（安靜一點、講完整的句子）。")
         print(f"參考文字：{ref_text}")
@@ -298,7 +315,7 @@ def main():
         ref_wav = str(Path(args.voice).expanduser())
         sidecar = Path(ref_wav).with_suffix(".txt")  # 參考音旁邊有同名 .txt 就直接用
         ref_text = args.voice_text or (
-            sidecar.read_text(encoding="utf-8").strip() if sidecar.exists() else transcribe(Path(ref_wav), stt_server)
+            sidecar.read_text(encoding="utf-8").strip() if sidecar.exists() else transcribe(Path(ref_wav), stt)
         )
         print(f"參考聲音：{ref_wav}\n參考文字：{ref_text}")
 
@@ -366,7 +383,7 @@ def main():
                     print("找不到那個檔案\n")
                     continue
                 sidecar = path.with_suffix(".txt")
-                text = sidecar.read_text(encoding="utf-8").strip() if sidecar.exists() else transcribe(path, stt_server)
+                text = sidecar.read_text(encoding="utf-8").strip() if sidecar.exists() else transcribe(path, stt)
                 if not text:
                     print("聽不出參考音的內容，換一個檔案\n")
                     continue
@@ -380,7 +397,7 @@ def main():
                 if not record(ref, args.device):
                     print("沒錄到聲音\n")
                     continue
-                text = transcribe(ref, stt_server)
+                text = transcribe(ref, stt)
                 if not text:
                     print("聽不出內容，再錄一次\n")
                     continue
@@ -409,7 +426,7 @@ def main():
             print(f"你問：{heard}", flush=True)
         else:
             t0 = time.time()
-            heard = transcribe(wav, stt_server)
+            heard = transcribe(wav, stt)
             stt = time.time() - t0
             print(f"你說：{heard}　（{stt:.1f}s）", flush=True)
         if not heard:

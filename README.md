@@ -352,6 +352,9 @@ Narrator」產生的，放在這裡只供**跑通流程的示範**。拿它 clon
 - **mori 的 whisper-server 若在跑就借用它**（`ps` 裡撈 `--port`）。它的模型已經在顯存裡，
   借用等於白賺：省下自己那份約 900 MiB，STT 也從 0.82 秒變 0.37 秒（不必每次重載模型）。
   它沒在跑才退回 `whisper-cli`。
+- **mori 的 whisper-server 會中途消失**（mori 關掉或重開）。程式原本只在啟動時查一次 port，
+  server 一死就每輪都失敗、沒有退路。現在遇到沒回應會先重查一次 port（mori 重開的話
+  port 會變），再不行就改用 `whisper-cli`，並提醒那會多吃約 900 MiB 顯存。
 - **開始載入前會先看顯存夠不夠**，不夠就直接講，免得等 20 秒載完才在合成那步炸掉。
   真的炸了程式會自己處理掉，不會把整場對話打斷。每輪的時間拆解後面也會印出當下剩多少顯存。
 - **合成的 OOM 會偽裝成別的錯誤**：`Calculated padded input size per channel: (3).
