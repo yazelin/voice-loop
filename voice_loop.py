@@ -416,6 +416,7 @@ def main():
         tts = time.time() - t0
         print(f"合計 {time.time() - turn_start:.1f}s"
               f"（STT {stt:.1f} ＋ LLM {llm:.1f} ＋ 合成 {tts:.1f}）"
+              f"　顯存剩 {gpu_free_mib()}"
               f"　語音長 {audio.shape[1] / cv.sample_rate:.1f}s，播放中…\n", flush=True)
         subprocess.run(["paplay", str(out)])
         if args.input:
