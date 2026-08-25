@@ -128,6 +128,8 @@ COMMANDS = {
     ":record": "重錄一段當參考聲音",
     ":backend": "換 LLM 後端：:backend groq / local / llmshare",
     ":len": "回答字數上限，例：:len 30",
+    ":clear": "清掉對話歷史，重新開始一個話題",
+    ":history": "看目前記著哪幾輪",
     ":say": "不錄音，直接打字問，例：:say 今天天氣如何",
     ":help": "看這份清單",
     ":q": "離開",
@@ -143,9 +145,18 @@ def parse_command(line):
     return name, arg.strip()
 
 
-def build_prompt(question, max_chars):
-    return (f"用正體中文口語回答，{max_chars} 個字以內，只回答問題本身，"
-            f"不要開場白、不要條列、不要 emoji。問題：{question}")
+# 帶太多輪會撐爆 llama-server 的 -c 1024，而且小模型的長 context 表現本來就差
+HISTORY_TURNS = 6
+
+
+def build_prompt(question, max_chars, history=()):
+    rule = (f"用正體中文口語回答，{max_chars} 個字以內，只回答問題本身，"
+            f"不要開場白、不要條列、不要 emoji。")
+    if not history:
+        return rule + f"問題：{question}"
+    past = "\n".join(f"我：{q}\n你：{a}" for q, a in history[-HISTORY_TURNS:])
+    return (f"{rule}下面是我們剛才的對話，接著回答最後那個問題，"
+            f"可以延續前面的話題。\n\n{past}\n我：{question}\n你：")
 
 
 def ask_llmshare(prompt, model):
@@ -181,8 +192,8 @@ def ask_openai_compatible(prompt, model, url, key=None):
     return data["choices"][0]["message"].get("content") or ""
 
 
-def ask_llm(question, backend, model, max_chars, url=None):
-    prompt = build_prompt(question, max_chars)
+def ask_llm(question, backend, model, max_chars, url=None, history=()):
+    prompt = build_prompt(question, max_chars, history)
     if backend == "llmshare":
         raw = ask_llmshare(prompt, model)
     elif backend == "groq":
@@ -202,6 +213,12 @@ def selfcheck():
     assert clean_stt("是繁體中文的句子。") == ""      # 錄到靜音時 whisper 的 prompt 回音
     assert clean_stt(STT_HINT) == ""
     assert clean_stt("以下是繁體中文的句子。真的嗎？") == "以下是繁體中文的句子。真的嗎？"
+    p0 = build_prompt("在嗎？", 60)
+    assert "問題：在嗎？" in p0 and "剛才的對話" not in p0
+    p1 = build_prompt("那再說一次", 60, [("天空為什麼藍", "因為散射"), ("那海呢", "反射天空")])
+    assert "我：天空為什麼藍" in p1 and "你：因為散射" in p1 and p1.endswith("我：那再說一次\n你：")
+    long_hist = [(f"問{i}", f"答{i}") for i in range(20)]
+    assert "問13" not in build_prompt("x", 60, long_hist) and "問14" in build_prompt("x", 60, long_hist)
     assert parse_command("  ") == (None, "")
     assert parse_command("你好") == (None, "你好")
     assert parse_command(":len 30") == (":len", "30")
@@ -292,6 +309,7 @@ def main():
     # 參考音固定的話，它的前處理只要算一次就好（10 秒參考音每輪要 1.4 秒）。
     # 預設模式每輪的參考音都不一樣（就是你剛講那句），沒得快取。
     # 參考音固定的話聲紋只算一次；換聲音時重算一次覆蓋掉，省得重開整支程式
+    history = []   # [(問, 答), ...]，只帶最近 HISTORY_TURNS 輪進 prompt
     state = {"wav": ref_wav, "text": ref_text, "spk": "", "backend": args.backend,
              "model": model, "len": args.max_chars}
 
@@ -315,6 +333,17 @@ def main():
             if name == ":help":
                 for k, v in COMMANDS.items():
                     print(f"  {k:9s} {v}")
+                print()
+                continue
+            if name == ":clear":
+                history.clear()
+                print("對話歷史清掉了\n")
+                continue
+            if name == ":history":
+                if not history:
+                    print("目前沒有歷史\n")
+                for q, a in history[-HISTORY_TURNS:]:
+                    print(f"  我：{q}\n  你：{a}")
                 print()
                 continue
             if name == ":len":
@@ -390,7 +419,8 @@ def main():
             continue
 
         t0 = time.time()
-        answer = ask_llm(heard, state["backend"], state["model"], state["len"], args.llm_url)
+        answer = ask_llm(heard, state["backend"], state["model"], state["len"],
+                         args.llm_url, history)
         llm = time.time() - t0
         print(f"回答：{answer}　（{llm:.1f}s）", flush=True)
 
@@ -415,6 +445,7 @@ def main():
             print(f"  顯存剩 {gpu_free_mib()} MiB。關掉 rustdesk 或幾個瀏覽器分頁再試，"
                   f"或 :backend groq 把 llama-server 的顯存讓出來。\n")
             continue
+        history.append((heard, answer))
         audio = torch.cat(pieces, dim=1)
         torchaudio.save(str(out), audio, cv.sample_rate)
         tts = time.time() - t0
