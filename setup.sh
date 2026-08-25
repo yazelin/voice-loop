@@ -33,10 +33,16 @@ fi
 if [ -n "${GROQ_API_KEY:-}" ]; then
   have "Groq" "GROQ_API_KEY 已設（--backend groq）"; backend=1
 fi
+if [ "$(curl -s --max-time 1 http://127.0.0.1:8080/health 2>/dev/null)" = '{"status":"ok"}' ]; then
+  have "地端 llama-server" "127.0.0.1:8080 活著（--backend local）"; backend=1
+else
+  say "地端 llama-server" "沒在跑（要用 --backend local 的話，啟動指令見 README「地端 LLM」）"
+fi
 if [ "$backend" = 0 ]; then
   need "LLM 後端" "兩條路擇一：
    llmshare：見 https://github.com/yazelin/duotify-ollama-cloud-setup ，再 export LLMSHARE_API_KEY=...
-   Groq    ：到 https://console.groq.com/keys 拿金鑰，再 export GROQ_API_KEY=gsk_...（不必裝套件）"
+   Groq    ：到 https://console.groq.com/keys 拿金鑰，再 export GROQ_API_KEY=gsk_...（不必裝套件）
+   地端    ：自己編 llama.cpp 跑 llama-server，完全離線，步驟見 README「地端 LLM」"
 fi
 
 # 4. whisper.cpp（STT，要 CUDA 版才會用到 GPU）

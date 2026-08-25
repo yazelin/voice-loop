@@ -28,8 +28,16 @@ MODEL_DIR = Path(os.environ.get("COSYVOICE_MODEL", COSYVOICE / "pretrained_model
 WHISPER_CLI = Path(os.environ.get("WHISPER_CLI", Path.home() / ".mori/bin/whisper-cli"))
 WHISPER_MODEL = Path(os.environ.get("WHISPER_MODEL", Path.home() / ".mori/models/ggml-small.bin"))
 WORK = Path.home() / "voice-loop/tmp"
-GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-DEFAULT_MODEL = {"llmshare": "deepseek-v4-flash:0731", "groq": "openai/gpt-oss-120b"}
+# groq 與 local 都是 OpenAI 相容端點，差在網址跟要不要金鑰
+LLM_URL = {
+    "groq": "https://api.groq.com/openai/v1/chat/completions",
+    "local": "http://127.0.0.1:8080/v1/chat/completions",
+}
+DEFAULT_MODEL = {
+    "llmshare": "deepseek-v4-flash:0731",
+    "groq": "openai/gpt-oss-120b",
+    "local": "qwen3-1.7b",  # llama-server 只載一個模型，這個名字只是標籤
+}
 
 PAREN_RE = re.compile(r"[(（\[][^)）\]]{0,6}[)）\]]")
 # 餵給 whisper 的 initial prompt。錄到靜音時它會把這句原樣吐回來，要當成沒聽到
@@ -57,12 +65,15 @@ def record(out_wav, device):
 
 def transcribe(wav):
     env = {**os.environ, "LD_LIBRARY_PATH": str(WHISPER_CLI.parent)}
-    out = subprocess.run(
+    r = subprocess.run(
         [str(WHISPER_CLI), "-m", str(WHISPER_MODEL), "-l", "zh", "-nt", "-np",
          "--prompt", STT_HINT, "-f", str(wav)],
         capture_output=True, text=True, env=env,
-    ).stdout
-    return clean_stt(out)
+    )
+    if r.returncode != 0:
+        # 顯存被別的模型佔滿時 whisper 會在這裡掛掉，吞掉錯誤會看起來像「沒聽到」
+        print(f"whisper 失敗（exit {r.returncode}）：{r.stderr.strip()[-200:]}", flush=True)
+    return clean_stt(r.stdout)
 
 
 def build_prompt(question, max_chars):
@@ -77,35 +88,42 @@ def ask_llmshare(prompt, model):
     return r.stdout
 
 
-def ask_groq(prompt, model):
-    key = os.environ.get("GROQ_API_KEY")
-    if not key:
-        return "沒有設 GROQ_API_KEY，問不到 Groq。"
-    body = json.dumps({
+def ask_openai_compatible(prompt, model, url, key=None):
+    payload = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "max_completion_tokens": 400,
-        "reasoning_effort": "low",  # gpt-oss 會先想再答，想太久就失去用 Groq 的意義
-    }).encode()
-    req = urllib.request.Request(
-        GROQ_URL, body,
-        {"Authorization": f"Bearer {key}", "Content-Type": "application/json",
-         # Cloudflare 會擋掉 urllib 的預設 User-Agent，回 403 error code 1010
-         "User-Agent": "voice-loop/1.0"},
-    )
+        # gpt-oss / Qwen3 都會先想再答，想太久就失去意義。兩邊各認一個欄位，
+        # 不認得的那個會被忽略
+        "reasoning_effort": "low",
+        "chat_template_kwargs": {"enable_thinking": False},
+    }
+    headers = {"Content-Type": "application/json",
+               # Cloudflare 會擋掉 urllib 的預設 User-Agent，回 403 error code 1010
+               "User-Agent": "voice-loop/1.0"}
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    req = urllib.request.Request(url, json.dumps(payload).encode(), headers)
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with urllib.request.urlopen(req, timeout=60) as r:
             data = json.load(r)
     except urllib.error.HTTPError as e:
-        return f"抱歉，Groq 回了 {e.code}。{e.read()[:80].decode('utf-8', 'replace')}"
+        return f"抱歉，{url} 回了 {e.code}。{e.read()[:80].decode('utf-8', 'replace')}"
     except OSError as e:
-        return f"抱歉，連不上 Groq。{e}"
+        return f"抱歉，連不上 {url}。{e}"
     return data["choices"][0]["message"].get("content") or ""
 
 
-def ask_llm(question, backend, model, max_chars):
+def ask_llm(question, backend, model, max_chars, url=None):
     prompt = build_prompt(question, max_chars)
-    raw = ask_groq(prompt, model) if backend == "groq" else ask_llmshare(prompt, model)
+    if backend == "llmshare":
+        raw = ask_llmshare(prompt, model)
+    elif backend == "groq":
+        key = os.environ.get("GROQ_API_KEY")
+        raw = ask_openai_compatible(prompt, model, url or LLM_URL["groq"], key) if key \
+            else "沒有設 GROQ_API_KEY，問不到 Groq。"
+    else:
+        raw = ask_openai_compatible(prompt, model, url or LLM_URL["local"])
     return " ".join(raw.split())[:max_chars * 2] or "我不知道要怎麼回答這個。"
 
 
@@ -122,8 +140,9 @@ def selfcheck():
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--backend", choices=["llmshare", "groq"], default="llmshare",
-                    help="回答用哪個 LLM 後端。groq 要 GROQ_API_KEY")
+    ap.add_argument("--backend", choices=["llmshare", "groq", "local"], default="llmshare",
+                    help="回答用哪個 LLM 後端。groq 要 GROQ_API_KEY；local 要自己先跑 llama-server")
+    ap.add_argument("--llm-url", help=f"覆寫 OpenAI 相容端點，預設 local 是 {LLM_URL['local']}")
     ap.add_argument("--model", help="不給就用該後端的預設："
                                     f"llmshare={DEFAULT_MODEL['llmshare']}、groq={DEFAULT_MODEL['groq']}")
     ap.add_argument("--device", default="", help="arecord 裝置，如 plughw:1,0；留空用系統預設")
@@ -212,7 +231,7 @@ def main():
             continue
 
         t0 = time.time()
-        answer = ask_llm(heard, args.backend, model, args.max_chars)
+        answer = ask_llm(heard, args.backend, model, args.max_chars, args.llm_url)
         print(f"回答：{answer}　（{time.time() - t0:.1f}s）", flush=True)
 
         # ponytail: 整段一次合成,不切句。回答本來就只有幾十個字,

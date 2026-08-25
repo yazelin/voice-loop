@@ -45,6 +45,7 @@ bash setup.sh
 |---|---|---|---|
 | `llmshare`（預設） | `deepseek-v4-flash:0731` | `llmshare` CLI ＋ 環境變數 `LLMSHARE_API_KEY` | <https://github.com/yazelin/duotify-ollama-cloud-setup>；`llmshare models` 看全部模型 |
 | `groq` | `openai/gpt-oss-120b` | 環境變數 `GROQ_API_KEY` | <https://console.groq.com/keys>，不必裝任何套件（走 stdlib 的 urllib） |
+| `local` | `qwen3.5-2b` | 自己先跑 `llama-server` | 見下面「地端 LLM」。完全離線，資料不出這台機器 |
 
 ```bash
 export GROQ_API_KEY=gsk_...
@@ -108,6 +109,116 @@ python3 voice_loop.py --selfcheck
 ```
 
 其他選項：`--max-chars`（回答字數上限，預設 60）。
+
+## 地端 LLM（`--backend local`）
+
+整條線唯一連外網的就是產生回答那一段。想連這段也離線，就在本機跑 `llama-server`，
+它給的是 OpenAI 相容端點，程式那邊跟 Groq 共用同一段程式碼，只差網址。
+
+### 一次性建置
+
+llama.cpp **沒有 Linux 的 CUDA 預編版**（只有 Windows 的），所以要自己編。這台的
+根碟長期只剩幾 GB，所以整包放在第二顆分割區：
+
+```bash
+P=/media/ct/57465421-bf2a-4daf-9133-eab6179e456f/home/ct/llama
+
+git clone --depth 1 https://github.com/ggml-org/llama.cpp "$P/src"
+cmake -S "$P/src" -B "$P/build" \
+  -DGGML_CUDA=ON \
+  -DCMAKE_CUDA_ARCHITECTURES=89 \
+  -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/gcc-12 \
+  -DLLAMA_CURL=OFF -DCMAKE_BUILD_TYPE=Release
+cmake --build "$P/build" --target llama-server -j$(nproc)
+cp -a "$P/build/bin/." "$P/bin/" && rm -rf "$P/build"   # 只留 209 MB 的執行檔與函式庫
+
+curl -L -o "$P/models/Qwen3.5-2B-Q4_K_M.gguf" \
+  https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-Q4_K_M.gguf
+```
+
+兩個一定要給的 cmake 參數：`CMAKE_CUDA_ARCHITECTURES=89` 是 RTX 4060 的 compute
+capability，不指定會為所有架構編一遍，慢好幾倍；`CMAKE_CUDA_HOST_COMPILER=gcc-12`
+是因為系統預設 gcc-13，CUDA 12.0 不吃。
+
+### 每次啟動
+
+```bash
+P=/media/ct/57465421-bf2a-4daf-9133-eab6179e456f/home/ct/llama
+LD_LIBRARY_PATH="$P/bin" "$P/bin/llama-server" \
+  -m "$P/models/Qwen3.5-2B-Q4_K_M.gguf" \
+  --host 127.0.0.1 --port 8080 \
+  -ngl 16 -c 1024 -np 1 -fa on --no-webui
+
+# 另一個終端機
+~/CosyVoice/.venv/bin/python voice_loop.py --backend local
+```
+
+`LD_LIBRARY_PATH` 不能省，把 `build/bin` 搬走之後執行檔找不到自己的 `.so`。
+
+### 為什麼是 `-ngl 16`
+
+這是整件事最反直覺的地方：**顯存不夠，`-ngl` 開太大反而是 whisper 掛掉**。
+
+8 GB 顯存的實際分帳（2026-08-26 實測）：
+
+| 項目 | 佔用 |
+|---|---|
+| CosyVoice 載入（權重＋CUDA context） | 3490 MiB |
+| CosyVoice 推論尖峰 | 4373 MiB |
+| whisper-cli ＋ ggml-small | 約 900 MiB |
+| Xorg（三螢幕） | 971 MiB |
+| Chromium／Electron 分頁 | 約 480 MiB |
+| rustdesk | 257 MiB |
+| gnome-shell 等雜項 | 約 105 MiB |
+
+扣掉桌面那堆之後，CosyVoice 的尖峰就把剩下的吃掉大半，**只剩約 1900 MiB 給 LLM 和 STT 分**。
+LLM 拿太多，whisper 就會直接 SIGSEGV。
+
+`-ngl` 決定幾層放 GPU、幾層留 CPU，實測：
+
+| `-ngl` | llama 顯存 | LLM 平均延遲 |
+|---|---|---|
+| 99（全上） | 1400 MiB | 0.32s |
+| 24 | 1370 MiB | 0.33s |
+| 20 | 1238 MiB | 0.38s |
+| **16** | **1096 MiB** | **0.58s** |
+| 12 | 960 MiB | 1.45s |
+
+16 是甜蜜點：省下的 304 MiB 剛好讓 whisper 塞得進去，速度只從 0.32 掉到 0.58 秒。
+掉到 12 速度就崩到 1.45 秒，比 Groq 還慢，沒有意義。
+
+**顯存多出來的話**（關掉 rustdesk 省 257 MiB、關幾個瀏覽器分頁、少接一台外接螢幕），
+可以把 `-ngl` 往上調回 20 或 24。三個螢幕合計 968 萬像素，筆電內建面板只佔 24%，
+Xorg 那 971 MiB 大部分是兩台外接螢幕的 framebuffer——不過拔線前後的差值我沒實測過。
+
+`-c 1024 -np 1 -fa on` 是把 context 調小、只開一個 slot、開 flash attention。
+llama-server 預設會開 4 個平行 slot，KV cache 跟著乘四。這組只省 100 MiB，
+比不上 `-ngl`，但不花錢。
+
+### 模型怎麼挑的
+
+顯存先卡死尺寸，剩下的才輪到品質。同樣六個問題實測：
+
+| 模型 | 顯存 | 平均 | 品質 |
+|---|---|---|---|
+| Qwen3-1.7B Q4_K_M | 約 1100 MiB | 0.09s | **淘汰**。六題有四題只是把問題原樣複誦一遍 |
+| **Qwen3.5-2B Q4_K_M** | 1400 MiB（-ngl 99） | 0.32s | 六題都正常回答。偶爾有事實瑕疵，偶爾夾雜簡體字 |
+| Qwen3.5-0.8B Q4_K_M | 682 MiB | 0.11s | 流暢但會講錯：「太陽反射雲層所以天空是藍的」、「電動車沒有二氧化碳排放」 |
+
+小尺寸模型目前最新的世代是 **Qwen3.5**（2026-02）。Qwen3.6 和 Qwen3.8 都只放 27B 以上，
+所以 2B 這一階沒有更新的可選。官方 `Qwen/Qwen3.5-2B-GGUF` 不存在，量化版要找
+`unsloth/Qwen3.5-2B-GGUF`。
+
+### 值不值得
+
+| 後端 | LLM 延遲 | 備註 |
+|---|---|---|
+| Groq `openai/gpt-oss-120b` | 0.37s | 答得準但乾 |
+| **local Qwen3.5-2B（-ngl 16）** | **0.58s** | 完全離線。品質是 2B 的水準，別期待太高 |
+| llmshare `deepseek-v4-flash:0731` | 1.74s | 最口語、最有溫度 |
+
+地端**不會比 Groq 快**，換過來的理由是離線與資料不出門。而且整輪的瓶頸從來不是 LLM，
+是合成那 2.8 秒。
 
 ## 合成要更快
 
@@ -179,6 +290,12 @@ Narrator」產生的，放在這裡只供**跑通流程的示範**。拿它 clon
 - 錄太短（少於一秒）clone 出來的聲音會不穩，講完整一句再放開。
 - **Groq 會擋 urllib 的預設 User-Agent**，回 `403 error code 1010`（那是 Cloudflare 不是 Groq）。
   程式送了自己的 `User-Agent`，別把那行拿掉。
+- **whisper 被擠掉的時候會 SIGSEGV**（`exit -11`，有時是 `exit 10`），畫面上不會出現 OOM 字樣。
+  程式原本吞掉 stderr，畫面上只會看到「你說：」後面空白，看起來像沒聽到你講話。
+  現在會把 whisper 的 exit code 和 stderr 印出來，別再把它藏起來。
+- **`pkill -f "llama-server..."` 會把自己殺掉**：執行這行的 shell，它自己的 cmdline 就含有
+  `llama-server` 這串字，`pkill -f` 比對得到。要用連接埠找 PID：
+  `ss -ltnp | awk '/127.0.0.1:8080/ {print $NF}' | grep -o 'pid=[0-9]*' | cut -d= -f2`。
 - 啟動時 wetext 從 modelscope 抓檔案會 403、印「no frontend is avaliable」，不影響合成。
 - 參考音的**語氣神態也會被 clone**。拿 TTS 合成音當參考，輸出就是機器人唸稿腔。
 - **回答比參考音短的時候 clone 品質會掉**，CosyVoice 會印
