@@ -28,6 +28,9 @@ MODEL_DIR = Path(os.environ.get("COSYVOICE_MODEL", COSYVOICE / "pretrained_model
 WHISPER_CLI = Path(os.environ.get("WHISPER_CLI", Path.home() / ".mori/bin/whisper-cli"))
 WHISPER_MODEL = Path(os.environ.get("WHISPER_MODEL", Path.home() / ".mori/models/ggml-small.bin"))
 WORK = Path.home() / "voice-loop/tmp"
+# mori 的共享 whisper 服務（契約 §6 / §11）：descriptor 固定路徑，supervisor 負責起停
+WHISPER_DESCRIPTOR = Path.home() / ".mori/whisper-server.json"
+WHISPER_SUPERVISOR = Path.home() / ".mori/bin/mori-whisper-serve"
 # groq 與 local 都是 OpenAI 相容端點，差在網址跟要不要金鑰
 LLM_URL = {
     "groq": "https://api.groq.com/openai/v1/chat/completions",
@@ -63,14 +66,33 @@ def record(out_wav, device):
 
 
 def find_whisper_server():
-    """mori 的 whisper-server 若在跑就借用它：模型已經在顯存裡，我們不必再載一份。
-    回傳 inference 網址，沒有就回 None。"""
-    ps = subprocess.run(["ps", "-eo", "args"], capture_output=True, text=True).stdout
-    for line in ps.splitlines():
-        if "whisper-server" in line and "--port" in line and "ps -eo" not in line:
-            m = re.search(r"--port\s+(\d+)", line)
-            if m:
-                return f"http://127.0.0.1:{m.group(1)}/inference"
+    """讀 mori 的 descriptor（契約 §6）。模型已經在顯存裡，借用它我們就不必再載一份。
+    descriptor 可能是舊的，所以順便確認 pid 還活著。"""
+    try:
+        d = json.loads(WHISPER_DESCRIPTOR.read_text(encoding="utf-8"))
+        os.kill(d["pid"], 0)
+    except (OSError, ValueError, KeyError):
+        return None
+    return f"http://{d['host']}:{d['port']}{d.get('inference_path', '/inference')}"
+
+
+def ensure_whisper_server(timeout=20):
+    """沒在跑就叫 mori 的 supervisor 起一份。它閒置 10 分鐘會自關（DEFAULT_IDLE_SECS=600），
+    所以聊天空檔久一點就得再喚醒一次。--ensure 是冪等的，重複呼叫沒關係。"""
+    url = find_whisper_server()
+    if url or not WHISPER_SUPERVISOR.is_file():
+        return url
+    try:
+        subprocess.run([str(WHISPER_SUPERVISOR), "--ensure"],
+                       capture_output=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    deadline = time.time() + timeout
+    while time.time() < deadline:      # 冷啟動載 small 模型大約 6 秒
+        url = find_whisper_server()
+        if url:
+            return url
+        time.sleep(0.5)
     return None
 
 
@@ -93,15 +115,15 @@ def transcribe(wav, stt=None):
         text, ok = _via_server(wav, stt["url"])
         if ok:
             return text
-        fresh = find_whisper_server()          # mori 可能重開了，port 會變
-        if fresh and fresh != stt["url"]:
+        fresh = ensure_whisper_server()        # 多半是閒置 10 分鐘自關了，喚醒它
+        if fresh:
             text, ok = _via_server(wav, fresh)
             if ok:
                 stt["url"] = fresh
                 print(f"whisper-server 換到 {fresh}", flush=True)
                 return text
         stt["url"] = None
-        print("whisper-server 沒回應了（大概被關掉），改用本機 whisper-cli。"
+        print("叫不動 mori 的 whisper-server，改用本機 whisper-cli。"
               "它要多吃約 900 MiB 顯存。", flush=True)
 
     env = {**os.environ, "LD_LIBRARY_PATH": str(WHISPER_CLI.parent)}
@@ -273,9 +295,9 @@ def main():
 
     WORK.mkdir(parents=True, exist_ok=True)
 
-    stt = {"url": find_whisper_server()}
+    stt = {"url": ensure_whisper_server()}
     if stt["url"]:
-        print(f"借用已經在跑的 whisper-server（{stt['url']}），不另外佔顯存。")
+        print(f"用 mori 的共享 whisper-server（{stt['url']}），不另外佔顯存。")
     vram_check(bool(stt["url"]))
 
     # 一定要在 import torch 之前設。顯存剩一千多卻配置不到一百 MiB 就是碎片化，

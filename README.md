@@ -349,12 +349,13 @@ Narrator」產生的，放在這裡只供**跑通流程的示範**。拿它 clon
   更糟的是它 abort 前會把 **GDB 的 backtrace 印到 stdout**，所以只看 exit code 卻照用 stdout，
   那整串 backtrace 會被當成你講的話送進 LLM（真的發生過，模型認真回答了那段 backtrace）。
   現在失敗一律回空字串，並把 exit code 與 stderr 印出來。
-- **mori 的 whisper-server 若在跑就借用它**（`ps` 裡撈 `--port`）。它的模型已經在顯存裡，
-  借用等於白賺：省下自己那份約 900 MiB，STT 也從 0.82 秒變 0.37 秒（不必每次重載模型）。
-  它沒在跑才退回 `whisper-cli`。
-- **mori 的 whisper-server 會中途消失**（mori 關掉或重開）。程式原本只在啟動時查一次 port，
-  server 一死就每輪都失敗、沒有退路。現在遇到沒回應會先重查一次 port（mori 重開的話
-  port 會變），再不行就改用 `whisper-cli`，並提醒那會多吃約 900 MiB 顯存。
+- **STT 靠 mori 的共享 whisper 服務**。它的模型已經在顯存裡，借用等於白賺：省下自己那份
+  約 900 MiB，STT 也從 0.82 秒變 0.37 秒（不必每次重載模型）。
+  讀 `~/.mori/whisper-server.json`（契約 §6）拿 host/port，順便驗 pid 還活著。
+- **它閒置十分鐘會自關**（`whisper_discovery::DEFAULT_IDLE_SECS = 600`，mori-meeting-recorder
+  的設計）。所以聊天空檔久一點它就消失了，port 每次重起都不一樣。程式遇到叫不通會跑
+  `~/.mori/bin/mori-whisper-serve --ensure` 把它喚醒（冪等、實測 1 秒），再讀新的 descriptor。
+  真的叫不動（沒裝 supervisor）才退回 `whisper-cli`，並提醒那要多吃約 900 MiB 顯存。
 - **開始載入前會先看顯存夠不夠**，不夠就直接講，免得等 20 秒載完才在合成那步炸掉。
   真的炸了程式會自己處理掉，不會把整場對話打斷。每輪的時間拆解後面也會印出當下剩多少顯存。
 - **合成的 OOM 會偽裝成別的錯誤**：`Calculated padded input size per channel: (3).
