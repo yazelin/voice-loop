@@ -39,7 +39,7 @@ LLM_URL = {
 DEFAULT_MODEL = {
     "llmshare": "deepseek-v4-flash:0731",
     "groq": "openai/gpt-oss-120b",
-    "local": "qwen3.5-2b",  # llama-server 只載一個模型，這個名字只是標籤
+    "local": "qwen3.5-4b",  # llama-server 只載一個模型，這個名字只是標籤
 }
 
 PAREN_RE = re.compile(r"[(（\[][^)）\]]{0,6}[)）\]]")
@@ -184,8 +184,9 @@ def parse_command(line):
     return name, arg.strip()
 
 
-# 帶太多輪會撐爆 llama-server 的 -c 1024，而且小模型的長 context 表現本來就差
-HISTORY_TURNS = 6
+# 上限不是顯存（-c 從 1024 開到 8192 只多 76 MiB），是小模型的長 context 表現。
+# 10 輪約 420 tokens，加上輸出上限 400 仍在 -c 1024 之內，所以兩種設定都安全。
+HISTORY_TURNS = 10
 
 
 def build_prompt(question, max_chars, history=()):
@@ -257,7 +258,8 @@ def selfcheck():
     p1 = build_prompt("那再說一次", 60, [("天空為什麼藍", "因為散射"), ("那海呢", "反射天空")])
     assert "我：天空為什麼藍" in p1 and "你：因為散射" in p1 and p1.endswith("我：那再說一次\n你：")
     long_hist = [(f"問{i}", f"答{i}") for i in range(20)]
-    assert "問13" not in build_prompt("x", 60, long_hist) and "問14" in build_prompt("x", 60, long_hist)
+    kept = build_prompt("x", 60, long_hist)          # 只帶最後 HISTORY_TURNS 輪
+    assert f"問{20 - HISTORY_TURNS}" in kept and f"問{20 - HISTORY_TURNS - 1}" not in kept
     assert parse_command("  ") == (None, "")
     assert parse_command("你好") == (None, "你好")
     assert parse_command(":len 30") == (":len", "30")

@@ -45,7 +45,7 @@ bash setup.sh
 |---|---|---|---|
 | `llmshare`（預設） | `deepseek-v4-flash:0731` | `llmshare` CLI ＋ 環境變數 `LLMSHARE_API_KEY` | <https://github.com/yazelin/duotify-ollama-cloud-setup>；`llmshare models` 看全部模型 |
 | `groq` | `openai/gpt-oss-120b` | 環境變數 `GROQ_API_KEY` | <https://console.groq.com/keys>，不必裝任何套件（走 stdlib 的 urllib） |
-| `local` | `qwen3.5-2b` | 自己先跑 `llama-server` | 見下面「地端 LLM」。完全離線，資料不出這台機器 |
+| `local` | `qwen3.5-4b` | 自己先跑 `llama-server` | 見下面「地端 LLM」。完全離線，資料不出這台機器 |
 
 ```bash
 export GROQ_API_KEY=gsk_...
@@ -135,20 +135,25 @@ python3 voice_loop.py --selfcheck
 
 ### 對話歷史
 
-會帶最近 **6 輪**問答進 prompt，所以可以延續話題（「牠叫什麼名字」問得出前一輪講的貓名）。
+會帶最近 **10 輪**問答進 prompt，所以可以延續話題（「牠叫什麼名字」問得出前一輪講的貓名）。
 歷史只在合成成功之後才記，失敗的那輪不會汙染上下文；存在記憶體裡，程式關掉就沒了。
 
-輪數上限是被 `llama-server` 的 `-c 1024` 決定的。用它的 tokenize 端點實際數過：
+用 llama-server 的 tokenize 端點實際數過，**每輪問答約 34 tokens**：
 
-| 歷史輪數 | 字數 | tokens |
-|---|---|---|
-| 0 | 54 | 38 |
-| 2 | 190 | 130 |
-| 4 | 284 | 194 |
-| 6 | 363 | 253 |
+| 歷史輪數 | 輸入 tokens | ＋輸出 400 | 需要的 `-c` |
+|---|---|---|---|
+| 6 | 263 | 663 | 1024 夠 |
+| 10 | 399 | 799 | 1024 夠 |
+| 20 | 739 | 1139 | 要 2048 |
+| 40 | 1419 | 1819 | 要 2048 |
+| 60 | 2099 | 2499 | 要 4096 |
 
-`-c 1024` 是輸入加輸出共用，輸出上限設 400，所以 6 輪用掉 653，還有三百多餘裕。
-想改就動 `HISTORY_TURNS`，大約還能拉到 10 輪——不過小模型的長 context 表現本來就會變差。
+`-c` 幾乎不花顯存（1024 到 8192 只差 76 MiB），所以擋住你的會是模型本身：
+2B、4B 這種尺寸吃長 context 會愈來愈糊，塞 60 輪進去它未必記得住前面。
+想改就動 `HISTORY_TURNS`，記得 `-c` 要跟著夠大。
+
+實測十輪設定跑五輪對話：講完「我養了一隻貓叫豆漿」「牠三歲」，中間插兩題科學問答，
+第五輪問「我的貓叫什麼幾歲」答得出「豆漿，三歲」。
 
 `:say` 需要有固定的參考聲音（`--voice`、`--record-voice` 或 `:record`），因為打字模式
 沒有「你剛講的那句」可以當聲音樣本。
@@ -183,8 +188,8 @@ cmake -S "$P/src" -B "$P/build" \
 cmake --build "$P/build" --target llama-server -j$(nproc)
 cp -a "$P/build/bin/." "$P/bin/" && rm -rf "$P/build"   # 只留 209 MB 的執行檔與函式庫
 
-curl -L -o "$P/models/Qwen3.5-2B-Q4_K_M.gguf" \
-  https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-Q4_K_M.gguf
+curl -L -o "$P/models/Qwen3.5-4B-Q4_K_M.gguf" \
+  https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf
 ```
 
 兩個一定要給的 cmake 參數：`CMAKE_CUDA_ARCHITECTURES=89` 是 RTX 4060 的 compute
@@ -196,9 +201,9 @@ capability，不指定會為所有架構編一遍，慢好幾倍；`CMAKE_CUDA_H
 ```bash
 P=/media/ct/57465421-bf2a-4daf-9133-eab6179e456f/home/ct/llama
 LD_LIBRARY_PATH="$P/bin" "$P/bin/llama-server" \
-  -m "$P/models/Qwen3.5-2B-Q4_K_M.gguf" \
+  -m "$P/models/Qwen3.5-4B-Q4_K_M.gguf" \
   --host 127.0.0.1 --port 8080 \
-  -ngl 16 -c 1024 -np 1 -fa on --no-webui
+  -ngl 8 -c 4096 -np 1 -fa on --no-webui
 
 # 另一個終端機
 ~/CosyVoice/.venv/bin/python voice_loop.py --backend local
@@ -206,7 +211,7 @@ LD_LIBRARY_PATH="$P/bin" "$P/bin/llama-server" \
 
 `LD_LIBRARY_PATH` 不能省，把 `build/bin` 搬走之後執行檔找不到自己的 `.so`。
 
-### 為什麼是 `-ngl 16`
+### 為什麼是 `-ngl 8`
 
 這是整件事最反直覺的地方：**顯存不夠，`-ngl` 開太大反而是 whisper 掛掉**。
 
@@ -225,26 +230,38 @@ LD_LIBRARY_PATH="$P/bin" "$P/bin/llama-server" \
 扣掉桌面那堆之後，CosyVoice 的尖峰就把剩下的吃掉大半，**只剩約 1900 MiB 給 LLM 和 STT 分**。
 LLM 拿太多，whisper 就會直接 SIGSEGV。
 
-`-ngl` 決定幾層放 GPU、幾層留 CPU，實測：
+`-ngl` 決定幾層放 GPU、幾層留 CPU。四種設定各跑一次完整對話，看的不是延遲而是**撐不撐得住**：
 
-| `-ngl` | llama 顯存 | LLM 平均延遲 |
-|---|---|---|
-| 99（全上） | 1400 MiB | 0.32s |
-| 24 | 1370 MiB | 0.33s |
-| 20 | 1238 MiB | 0.38s |
-| **16** | **1096 MiB** | **0.58s** |
-| 12 | 960 MiB | 1.45s |
+| 模型 / `-ngl` | llama 顯存 | LLM 延遲 | 整合實測 |
+|---|---|---|---|
+| 4B / 14 | 1586 MiB | 1.21s | 第一輪就在合成 OOM |
+| 4B / 12 | 1456 MiB | 1.28s | 第一輪過，之後全掛 |
+| **4B / 8** | **1180 MiB** | **1.4s** | **連五輪全過** |
+| 2B / 16 | 1096 MiB | 0.58s | 連八輪全過 |
 
-16 是甜蜜點：省下的 304 MiB 剛好讓 whisper 塞得進去，速度只從 0.32 掉到 0.58 秒。
-掉到 12 速度就崩到 1.45 秒，比 Groq 還慢，沒有意義。
+`-ngl` 這條線上，**延遲的差異遠小於「跑不跑得完」的差異**。4B 從 14 降到 8 只慢 0.2 秒，
+卻是從「每輪都掛」變成「完全穩定」。所以別為了那 0.2 秒把 `-ngl` 往上調。
+
+2B 快一倍（0.58 秒）也更省，但中文明顯差一階：「我講話速度很快嗎」它會答非所問，
+4B 會正確回答「我聽不到您的語速」。這個專案選 4B，慢的那 0.8 秒換句子通順。
 
 **顯存多出來的話**（關掉 rustdesk 省 257 MiB、關幾個瀏覽器分頁、少接一台外接螢幕），
 可以把 `-ngl` 往上調回 20 或 24。三個螢幕合計 968 萬像素，筆電內建面板只佔 24%，
 Xorg 那 971 MiB 大部分是兩台外接螢幕的 framebuffer——不過拔線前後的差值我沒實測過。
 
-`-c 1024 -np 1 -fa on` 是把 context 調小、只開一個 slot、開 flash attention。
-llama-server 預設會開 4 個平行 slot，KV cache 跟著乘四。這組只省 100 MiB，
-比不上 `-ngl`，但不花錢。
+`-np 1 -fa on` 是只開一個 slot、開 flash attention。llama-server 預設會開 4 個平行 slot，
+KV cache 跟著乘四。
+
+`-c` 幾乎不花顯存，所以開大一點沒差：
+
+| `-c` | llama 顯存 |
+|---|---|
+| 1024 | 1180 MiB |
+| 2048 | 1196 MiB |
+| 4096 | 1208 MiB |
+| 8192 | 1256 MiB |
+
+1024 到 8192 只差 76 MiB。設 4096 是為了讓對話歷史有空間，見下面「對話歷史」。
 
 ### 模型怎麼挑的
 
