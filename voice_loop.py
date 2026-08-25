@@ -156,6 +156,12 @@ def main():
     print("載入 CosyVoice…", flush=True)
     t0 = time.time()
     cv = AutoModel(model_dir=str(MODEL_DIR), fp16=True)
+    # 參考音固定的話，它的前處理只要算一次就好（10 秒參考音每輪要 1.4 秒）。
+    # 預設模式每輪的參考音都不一樣（就是你剛講那句），沒得快取。
+    spk_id = ""
+    if ref_wav:
+        spk_id = "fixed"
+        cv.add_zero_shot_spk(f"You are a helpful assistant.<|endofprompt|>{ref_text}", ref_wav, spk_id)
     print(f"好了（{time.time() - t0:.0f}s）。{args.backend} / {model}　Ctrl-C 離開\n", flush=True)
 
     wav = Path(args.input) if args.input else WORK / "in.wav"
@@ -187,6 +193,7 @@ def main():
                 answer,
                 f"You are a helpful assistant.<|endofprompt|>{ref_text or heard}",
                 ref_wav or str(wav),
+                zero_shot_spk_id=spk_id,
                 stream=False,
             )
         ]
