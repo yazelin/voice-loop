@@ -244,6 +244,10 @@ def main():
         print(f"借用已經在跑的 whisper-server（{stt_server}），不另外佔顯存。")
     vram_check(bool(stt_server))
 
+    # 一定要在 import torch 之前設。顯存剩一千多卻配置不到一百 MiB 就是碎片化，
+    # expandable_segments 讓配置器可以擴張既有區段，不必找連續空間。
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
     import logging
     # CosyVoice 的 INFO 與 tqdm 進度條會把畫面洗掉；「合成文字比參考文字短」那個
     # WARNING 在這個用法下必然會出現（回答就是比參考音短），一起壓掉
