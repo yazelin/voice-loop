@@ -123,6 +123,9 @@ def main():
     ap.add_argument("--device", default="", help="arecord 裝置，如 plughw:1,0；留空用系統預設")
     ap.add_argument("--max-chars", type=int, default=60, help="回答字數上限")
     ap.add_argument("--voice", help="固定的 clone 參考音 wav；不給就用你每次講的那句")
+    ap.add_argument("--record-voice", nargs="?", const="", metavar="WAV",
+                    help="開場先錄一段當這場的參考音，之後每輪都用它。"
+                         "給路徑就順便存成檔（連同 .txt 逐字稿），下次直接 --voice 那個檔")
     ap.add_argument("--voice-text", help="參考音的逐字稿；不給就讀旁邊的同名 .txt，"
                                          "沒有的話用 whisper 轉一次")
     ap.add_argument("--input", help="拿現成 wav 代替麥克風，跑一輪就結束")
@@ -131,6 +134,11 @@ def main():
     if args.selfcheck:
         return selfcheck()
     model = args.model or DEFAULT_MODEL[args.backend]
+    if args.voice and args.record_voice is not None:
+        ap.error("--voice 和 --record-voice 只能挑一個")
+    if args.record_voice is not None and args.input:
+        ap.error("--record-voice 要用麥克風，不能跟 --input 一起用")
+
 
     WORK.mkdir(parents=True, exist_ok=True)
     import logging
@@ -149,13 +157,26 @@ def main():
     from cosyvoice.cli.cosyvoice import AutoModel
 
     ref_wav = ref_text = None
-    if args.voice:
+    if args.record_voice is not None:
+        ref_wav = str(Path(args.record_voice).expanduser()) if args.record_voice else str(WORK / "voice.wav")
+        print("先錄一段當這場的參考音：講十到三十秒，自然講話不要唸稿。")
+        if not record(Path(ref_wav), args.device):
+            sys.exit("沒錄到聲音，重跑一次。")
+        ref_text = transcribe(Path(ref_wav))
+        if not ref_text:
+            sys.exit("聽不出參考音的內容，重錄一次（安靜一點、講完整的句子）。")
+        print(f"參考文字：{ref_text}")
+        if args.record_voice:
+            Path(ref_wav).with_suffix(".txt").write_text(ref_text + "\n", encoding="utf-8")
+            print(f"已存成 {ref_wav}，下次可以直接 --voice {ref_wav}")
+    elif args.voice:
         ref_wav = str(Path(args.voice).expanduser())
         sidecar = Path(ref_wav).with_suffix(".txt")  # 參考音旁邊有同名 .txt 就直接用
         ref_text = args.voice_text or (
             sidecar.read_text(encoding="utf-8").strip() if sidecar.exists() else transcribe(Path(ref_wav))
         )
         print(f"參考聲音：{ref_wav}\n參考文字：{ref_text}")
+
 
     print("載入 CosyVoice…", flush=True)
     t0 = time.time()

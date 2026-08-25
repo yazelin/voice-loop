@@ -9,8 +9,15 @@
   arecord        語音轉文字              簡短回答一句          用你剛剛那句話當聲音樣本
 ```
 
-voice clone 的參考音就是**你剛剛講的那句話**，參考文字就是 STT 的結果，所以不用事先錄樣本。
-想固定成別的聲音，給 `--voice`。
+聲音怎麼來，三種模式：
+
+| 怎麼跑 | 參考音是什麼 | 適合 |
+|---|---|---|
+| 不給參數 | **你剛剛講的那句話**，每輪換 | 隨手玩，不用事先準備 |
+| `--record-voice` | 開場先錄一段，整場都用它 | 想要聲音穩定又不想先準備檔案 |
+| `--voice 檔案.wav` | 指定的檔案 | 已經有錄好的樣本 |
+
+參考文字都不用自己打：不給參數時用 STT 的結果，其餘兩種讀同名 `.txt` 或自動轉一次。
 
 ## 依賴
 
@@ -83,6 +90,10 @@ export WHISPER_MODEL=/somewhere/ggml-small.bin
 ~/CosyVoice/.venv/bin/python voice_loop.py --backend groq
 ~/CosyVoice/.venv/bin/python voice_loop.py --model glm-5.2
 
+# 開場錄一段當這場的參考音（存起來，下次可以直接 --voice 它）
+~/CosyVoice/.venv/bin/python voice_loop.py --record-voice assets/我的聲音.wav
+~/CosyVoice/.venv/bin/python voice_loop.py --record-voice   # 不存檔，只用這一場
+
 # 固定用附的 Tiffy 聲音回答（逐字稿自動讀同名 .txt）
 ~/CosyVoice/.venv/bin/python voice_loop.py --voice assets/jinn-tiffy-10s.wav
 
@@ -145,7 +156,10 @@ cp 我的聲音.wav 我的聲音.txt assets/     # 多一個選項，Tiffy 還�
 ~/CosyVoice/.venv/bin/python voice_loop.py                                     # 不挑,用你當下講的那句
 ```
 
-給了 `--voice` 就會自動快取聲紋，每輪合成少 1.5 秒（見上面「合成要更快」）。
+`--voice` 和 `--record-voice` 都會自動快取聲紋，每輪合成少 1.5 秒（見上面「合成要更快」）。
+
+`--record-voice` 給了路徑就會把 wav 和轉好的 `.txt` 一起存下來，下次直接
+`--voice 那個檔` 就好，不必再錄一次。不給路徑就只在這一場有效。
 
 **授權注意**：這段音是 2026 年用 ElevenLabs 的商用聲線「Tiffy - Taiwanese Bilingual
 Narrator」產生的，放在這裡只供**跑通流程的示範**。拿它 clone 出來的語音要對外發佈
