@@ -23,13 +23,20 @@ for c in arecord paplay ffmpeg; do
   command -v $c >/dev/null && have "$c" "$(command -v $c)" || need "$c" "sudo apt install alsa-utils pulseaudio-utils ffmpeg"
 done
 
-# 3. llmshare（回答用的 LLM 閘道）
-if command -v llmshare >/dev/null; then
-  have "llmshare" "$(command -v llmshare)"
-  [ -n "${LLMSHARE_API_KEY:-}" ] && have "LLMSHARE_API_KEY" "已設" \
-    || need "LLMSHARE_API_KEY" "export LLMSHARE_API_KEY=... （沒有這把金鑰就問不到模型）"
-else
-  need "llmshare" "見 https://github.com/yazelin/duotify-ollama-cloud-setup 的 README"
+# 3. 回答用的 LLM 後端（llmshare 或 Groq，有一個就夠）
+backend=0
+if command -v llmshare >/dev/null && [ -n "${LLMSHARE_API_KEY:-}" ]; then
+  have "llmshare" "已裝且金鑰已設（--backend llmshare，預設）"; backend=1
+elif command -v llmshare >/dev/null; then
+  say "llmshare" "已裝但沒設 LLMSHARE_API_KEY"
+fi
+if [ -n "${GROQ_API_KEY:-}" ]; then
+  have "Groq" "GROQ_API_KEY 已設（--backend groq）"; backend=1
+fi
+if [ "$backend" = 0 ]; then
+  need "LLM 後端" "兩條路擇一：
+   llmshare：見 https://github.com/yazelin/duotify-ollama-cloud-setup ，再 export LLMSHARE_API_KEY=...
+   Groq    ：到 https://console.groq.com/keys 拿金鑰，再 export GROQ_API_KEY=gsk_...（不必裝套件）"
 fi
 
 # 4. whisper.cpp（STT，要 CUDA 版才會用到 GPU）
