@@ -62,6 +62,13 @@ Groq 那條走 OpenAI 相容的 `/openai/v1/chat/completions`，`reasoning_effor
 | Groq `openai/gpt-oss-120b` | 0.37s | 0.44s | 準確但乾，像查資料 |
 | llmshare `deepseek-v4-flash:0731` | 1.74s | 2.01s | 慢五倍，但口語、有溫度，比較像在聊天 |
 
+llmshare 那個 1.74 秒是好時段量到的。後來交錯重量，同一個模型同一個問題四次分別是
+1.0、2.3、6.4、7.3 秒——**延遲取決於共享閘道當下的負載，不穩定**。要可預測就用 Groq 或地端。
+
+順帶一提，`llmshare raw` 走的也是 OpenAI 相容的 `chat/completions`，所以直接打 HTTP
+省掉那個子行程理論上會快一點。實測交錯比較是 4.25 對 4.78 秒，差異被閘道的抖動蓋過去了，
+所以維持用 `raw`，不值得為此多寫一條程式路徑。
+
 要反應快選 Groq，要講話像人選 llmshare。整輪的另外兩段（STT 約 0.6 秒、合成 2 到 6 秒）
 兩邊一樣，所以換 Groq 大概省一秒多。
 
@@ -244,7 +251,7 @@ llama-server 預設會開 4 個平行 slot，KV cache 跟著乘四。這組只�
 |---|---|---|
 | Groq `openai/gpt-oss-120b` | 0.37s | 答得準但乾 |
 | **local Qwen3.5-2B（-ngl 16）** | **0.58s** | 完全離線。品質是 2B 的水準，別期待太高 |
-| llmshare `deepseek-v4-flash:0731` | 1.74s | 最口語、最有溫度 |
+| llmshare `deepseek-v4-flash:0731` | 1.0 到 10s | 最口語、最有溫度，但延遲很不穩 |
 
 地端**不會比 Groq 快**，換過來的理由是離線與資料不出門。而且整輪的瓶頸從來不是 LLM，
 是合成那 2.8 秒。
