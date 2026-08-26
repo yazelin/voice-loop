@@ -21,6 +21,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from taiwanize import taiwanize_text
 
 HERE = Path(__file__).resolve().parent
 DEFAULT_VOICE = HERE / "assets/jinn-tiffy-10s.wav"
@@ -471,10 +472,11 @@ def main():
         turn_start = time.time()  # 從送進 whisper 算到播放前，就是使用者感覺到的等待
         if direct_tts:
             heard = direct_tts
-            answer = direct_tts
+            answer_display = taiwanize_text(direct_tts, for_speech=False)
+            speech_text = taiwanize_text(direct_tts, for_speech=True)
             stt_secs = 0.0
             llm = 0.0
-            print(f"發音：{answer}", flush=True)
+            print(f"發音：{answer_display}", flush=True)
         else:
             if typed:
                 heard = typed
@@ -492,10 +494,12 @@ def main():
                 continue
 
             t0 = time.time()
-            answer = ask_llm(heard, state["backend"], state["model"], state["len"],
-                             args.llm_url, history)
+            raw_answer = ask_llm(heard, state["backend"], state["model"], state["len"],
+                                 args.llm_url, history)
             llm = time.time() - t0
-            print(f"回答：{answer}　（{llm:.1f}s）", flush=True)
+            answer_display = taiwanize_text(raw_answer, for_speech=False)
+            speech_text = taiwanize_text(raw_answer, for_speech=True)
+            print(f"回答：{answer_display}　（{llm:.1f}s）", flush=True)
 
         # ponytail: 整段一次合成,不切句。回答本來就只有幾十個字,
         # 切得越碎離參考文字越遠,CosyVoice 的 clone 品質越差
@@ -504,7 +508,7 @@ def main():
             pieces = [
                 j["tts_speech"]
                 for j in cv.inference_zero_shot(
-                    answer,
+                    speech_text,
                     f"You are a helpful assistant.<|endofprompt|>{state['text'] or heard}",
                     state["wav"] or str(wav),
                     zero_shot_spk_id=state["spk"],
@@ -519,7 +523,7 @@ def main():
                   f"或 :backend groq 把 llama-server 的顯存讓出來。\n")
             continue
         if not direct_tts:
-            history.append((heard, answer))
+            history.append((heard, answer_display))
         audio = torch.cat(pieces, dim=1)
         torchaudio.save(str(out), audio, cv.sample_rate)
         tts = time.time() - t0
