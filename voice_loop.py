@@ -180,7 +180,8 @@ COMMANDS = {
     ":len": "回答字數上限，例：:len 30",
     ":clear": "清掉對話歷史，重新開始一個話題",
     ":history": "看目前記著哪幾輪",
-    ":say": "不錄音，直接打字問，例：:say 今天天氣如何",
+    ":say": "不錄音，直接打字問 LLM，例：:say 今天天氣如何",
+    ":tts": "純文字發音測試（不問 LLM、不進記憶），例：:tts 測試一段話",
     ":help": "看這份清單",
     ":q": "離開",
 }
@@ -378,6 +379,7 @@ def main():
     out = WORK / "out.wav"
     while True:
         typed = ""
+        direct_tts = ""
         if not args.input:
             name, arg = parse_command(input("按 Enter 錄音，或輸入指令（:help）…"))
             if name == ":q":
@@ -447,6 +449,14 @@ def main():
                     print("打字模式沒有當下的錄音可以當聲音樣本，先 :record 或 :voice\n")
                     continue
                 typed = arg
+            elif name == ":tts":
+                if not arg:
+                    print("要給發音文字，例：:tts 測試一段話\n")
+                    continue
+                if not state["wav"]:
+                    print("TTS 模式沒有當下的錄音可以當聲音樣本，先 :record 或 :voice\n")
+                    continue
+                direct_tts = arg
             elif name is not None:
                 print(f"沒有 {name} 這個指令，:help 看清單\n")
                 continue
@@ -455,26 +465,33 @@ def main():
                 continue
 
         turn_start = time.time()  # 從送進 whisper 算到播放前，就是使用者感覺到的等待
-        if typed:
-            heard = typed
+        if direct_tts:
+            heard = direct_tts
+            answer = direct_tts
             stt_secs = 0.0
-            print(f"你問：{heard}", flush=True)
+            llm = 0.0
+            print(f"發音：{answer}", flush=True)
         else:
-            t0 = time.time()
-            heard = transcribe(wav, stt)
-            stt_secs = time.time() - t0
-            print(f"你說：{heard}　（{stt_secs:.1f}s）", flush=True)
-        if not heard:
-            print("聽不出內容，再試一次。\n")
-            if args.input:
-                return
-            continue
+            if typed:
+                heard = typed
+                stt_secs = 0.0
+                print(f"你問：{heard}", flush=True)
+            else:
+                t0 = time.time()
+                heard = transcribe(wav, stt)
+                stt_secs = time.time() - t0
+                print(f"你說：{heard}　（{stt_secs:.1f}s）", flush=True)
+            if not heard:
+                print("聽不出內容，再試一次。\n")
+                if args.input:
+                    return
+                continue
 
-        t0 = time.time()
-        answer = ask_llm(heard, state["backend"], state["model"], state["len"],
-                         args.llm_url, history)
-        llm = time.time() - t0
-        print(f"回答：{answer}　（{llm:.1f}s）", flush=True)
+            t0 = time.time()
+            answer = ask_llm(heard, state["backend"], state["model"], state["len"],
+                             args.llm_url, history)
+            llm = time.time() - t0
+            print(f"回答：{answer}　（{llm:.1f}s）", flush=True)
 
         # ponytail: 整段一次合成,不切句。回答本來就只有幾十個字,
         # 切得越碎離參考文字越遠,CosyVoice 的 clone 品質越差
@@ -497,7 +514,8 @@ def main():
             print(f"  顯存剩 {gpu_free_mib()} MiB。關掉 rustdesk 或幾個瀏覽器分頁再試，"
                   f"或 :backend groq 把 llama-server 的顯存讓出來。\n")
             continue
-        history.append((heard, answer))
+        if not direct_tts:
+            history.append((heard, answer))
         audio = torch.cat(pieces, dim=1)
         torchaudio.save(str(out), audio, cv.sample_rate)
         tts = time.time() - t0
