@@ -47,10 +47,21 @@ PAREN_RE = re.compile(r"[(（\[][^)）\]]{0,6}[)）\]]")
 STT_HINT = "以下是繁體中文的句子。"
 
 
+HALLUCINATIONS = {
+    "謝謝大家收看", "謝謝大家收看。", "請訂閱我的頻道", "請訂閱我的頻道。",
+    "請不吝賜教", "謝謝大家", "謝謝大家。", "未完待續", "感謝您的收看",
+}
+
+
 def clean_stt(text):
-    """whisper 常回（音樂）（掌聲）這種註記與前後空白，清掉；prompt 回音當成沒聽到。"""
+    """whisper 常回（音樂）（掌聲）這種註記與前後空白，清掉；prompt 回音與幻聽當成沒聽到。"""
     text = PAREN_RE.sub("", text).strip()
-    return "" if text and text in STT_HINT else text
+    if not text or text in STT_HINT or text in HALLUCINATIONS:
+        return ""
+    # 檢查重複循環幻聽（例如同一句話連續重複 3 次以上）
+    if re.match(r"^(.{2,12}?)\1{2,}[。！!？\?]*$", text):
+        return ""
+    return text
 
 
 def record(out_wav, device):
@@ -99,7 +110,7 @@ def ensure_whisper_server(timeout=20):
 def _via_server(wav, server):
     """(文字, 成功與否)。空字串但成功 = 真的沒聽到內容。"""
     r = subprocess.run(
-        ["curl", "-s", "--max-time", "60", "-F", f"file=@{wav}", "-F", "language=zh",
+        ["curl", "-s", "--max-time", "10", "-F", f"file=@{wav}", "-F", "language=zh",
          "-F", "response_format=json", "-F", f"prompt={STT_HINT}", server],
         capture_output=True, text=True,
     )
@@ -129,7 +140,7 @@ def transcribe(wav, stt=None):
     env = {**os.environ, "LD_LIBRARY_PATH": str(WHISPER_CLI.parent)}
     r = subprocess.run(
         [str(WHISPER_CLI), "-m", str(WHISPER_MODEL), "-l", "zh", "-nt", "-np",
-         "--prompt", STT_HINT, "-f", str(wav)],
+         "-nf", "-sns", "-nth", "0.6", "--prompt", STT_HINT, "-f", str(wav)],
         capture_output=True, text=True, env=env,
     )
     if r.returncode != 0:
