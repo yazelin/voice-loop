@@ -124,13 +124,14 @@ python3 voice_loop.py --selfcheck
 
 | 指令 | 做什麼 |
 |---|---|
-| `:voice <檔案>` | 中途換參考聲音，聲紋當場重新快取 |
+| `:voice <檔案>` | 中途換參考聲音，聲紋當場重新快取（預設已為 `assets/jinn-tiffy-10s.wav`） |
 | `:record` | 中途重錄一段當參考聲音 |
 | `:backend groq` | 換 LLM 後端（`llmshare` / `groq` / `local`） |
 | `:len 30` | 改回答字數上限 |
 | `:clear` | 清掉對話歷史，換新話題 |
 | `:history` | 看目前記著哪幾輪 |
-| `:say 今天天氣如何` | 不錄音，直接打字問 |
+| `:say 今天天氣如何` | 不錄音，直接打字問 LLM（會產生回答並進記憶） |
+| `:tts 測試一段話` | 純文字發音測試（不問 LLM、不進記憶，純聽 TTS 發音） |
 | `:help` / `:q` | 清單／離開 |
 
 ### 對話歷史
