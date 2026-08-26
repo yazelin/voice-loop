@@ -22,6 +22,9 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+HERE = Path(__file__).resolve().parent
+DEFAULT_VOICE = HERE / "assets/jinn-tiffy-10s.wav"
+
 # 路徑都可以用環境變數覆寫，換機器不必改 code
 COSYVOICE = Path(os.environ.get("COSYVOICE_DIR", Path.home() / "CosyVoice"))
 MODEL_DIR = Path(os.environ.get("COSYVOICE_MODEL", COSYVOICE / "pretrained_models/Fun-CosyVoice3-0.5B"))
@@ -289,7 +292,8 @@ def main():
                                     f"llmshare={DEFAULT_MODEL['llmshare']}、groq={DEFAULT_MODEL['groq']}")
     ap.add_argument("--device", default="", help="arecord 裝置，如 plughw:1,0；留空用系統預設")
     ap.add_argument("--max-chars", type=int, default=60, help="回答字數上限")
-    ap.add_argument("--voice", help="固定的 clone 參考音 wav；不給就用你每次講的那句")
+    ap.add_argument("--voice", default=str(DEFAULT_VOICE) if DEFAULT_VOICE.exists() else "",
+                    help="固定的 clone 參考音 wav；預設為 assets/jinn-tiffy-10s.wav")
     ap.add_argument("--record-voice", nargs="?", const="", metavar="WAV",
                     help="開場先錄一段當這場的參考音，之後每輪都用它。"
                          "給路徑就順便存成檔（連同 .txt 逐字稿），下次直接 --voice 那個檔")
