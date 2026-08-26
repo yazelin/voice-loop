@@ -446,13 +446,13 @@ def main():
         turn_start = time.time()  # 從送進 whisper 算到播放前，就是使用者感覺到的等待
         if typed:
             heard = typed
-            stt = 0.0
+            stt_secs = 0.0
             print(f"你問：{heard}", flush=True)
         else:
             t0 = time.time()
             heard = transcribe(wav, stt)
-            stt = time.time() - t0
-            print(f"你說：{heard}　（{stt:.1f}s）", flush=True)
+            stt_secs = time.time() - t0
+            print(f"你說：{heard}　（{stt_secs:.1f}s）", flush=True)
         if not heard:
             print("聽不出內容，再試一次。\n")
             if args.input:
@@ -491,7 +491,7 @@ def main():
         torchaudio.save(str(out), audio, cv.sample_rate)
         tts = time.time() - t0
         print(f"合計 {time.time() - turn_start:.1f}s"
-              f"（STT {stt:.1f} ＋ LLM {llm:.1f} ＋ 合成 {tts:.1f}）"
+              f"（STT {stt_secs:.1f} ＋ LLM {llm:.1f} ＋ 合成 {tts:.1f}）"
               f"　顯存剩 {gpu_free_mib()}"
               f"　語音長 {audio.shape[1] / cv.sample_rate:.1f}s，播放中…\n", flush=True)
         subprocess.run(["paplay", str(out)])
