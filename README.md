@@ -49,7 +49,7 @@ bash setup.sh
 
 ```bash
 export GROQ_API_KEY=gsk_...
-~/CosyVoice/.venv/bin/python voice_loop.py --backend groq
+~/voice-venv/bin/python voice_loop.py --backend groq
 ```
 
 Groq 那條走 OpenAI 相容的 `/openai/v1/chat/completions`，`reasoning_effort` 設成 `low`
@@ -88,28 +88,28 @@ export WHISPER_MODEL=/somewhere/ggml-small.bin
 一定要用 CosyVoice 那個 venv 的 python（依賴都裝在裡面）：
 
 ```bash
-~/CosyVoice/.venv/bin/python voice_loop.py
+~/voice-venv/bin/python voice_loop.py
 ```
 
 按 Enter 開始錄音，再按 Enter 停止，然後等它回答。Ctrl-C 離開。
 
 ```bash
 # 換 LLM 後端與模型
-~/CosyVoice/.venv/bin/python voice_loop.py --backend groq
-~/CosyVoice/.venv/bin/python voice_loop.py --model glm-5.2
+~/voice-venv/bin/python voice_loop.py --backend groq
+~/voice-venv/bin/python voice_loop.py --model glm-5.2
 
 # 開場錄一段當這場的參考音（存起來，下次可以直接 --voice 它）
-~/CosyVoice/.venv/bin/python voice_loop.py --record-voice assets/我的聲音.wav
-~/CosyVoice/.venv/bin/python voice_loop.py --record-voice   # 不存檔，只用這一場
+~/voice-venv/bin/python voice_loop.py --record-voice assets/我的聲音.wav
+~/voice-venv/bin/python voice_loop.py --record-voice   # 不存檔，只用這一場
 
 # 固定用附的 Tiffy 聲音回答（逐字稿自動讀同名 .txt）
-~/CosyVoice/.venv/bin/python voice_loop.py --voice assets/jinn-tiffy-10s.wav
+~/voice-venv/bin/python voice_loop.py --voice assets/jinn-tiffy-10s.wav
 
 # 指定麥克風（arecord -l 查裝置編號）
-~/CosyVoice/.venv/bin/python voice_loop.py --device plughw:1,0
+~/voice-venv/bin/python voice_loop.py --device plughw:1,0
 
 # 不用麥克風，拿現成 wav 跑一輪就結束（測試用）
-~/CosyVoice/.venv/bin/python voice_loop.py --input some.wav
+~/voice-venv/bin/python voice_loop.py --input some.wav
 
 # 純文字邏輯自測，不載模型、不用 GPU
 python3 voice_loop.py --selfcheck
@@ -167,17 +167,17 @@ python3 voice_loop.py --selfcheck
 
 計時從送進 whisper 開始、到音檔寫完為止，也就是你講完話之後真正在等的那段。
 
-## 🇹🇼 台灣化前處理系統（`taiwanize.py`）
+## 台灣化前處理系統（`taiwanize.py`）
 
 本專案內建兩層式台灣化前處理：
-1. **詞彙層（文字顯示）**：自動將 LLM 輸出的簡中/大陸詞彙轉為台灣習慣用語（`視頻`➔`影片`、`內存`➔`記憶體`、`默認`➔`預設`、`項目`➔`專案`、`服務器`➔`伺服器`、`這兒`➔`這裡`）。
+1. **詞彙層（文字顯示）**：自動將 LLM 輸出的簡中/大陸詞彙轉為台灣習慣用語（`視頻`→`影片`、`內存`→`記憶體`、`默認`→`預設`、`項目`→`專案`、`服務器`→`伺服器`、`這兒`→`這裡`）。
 2. **聲調與同音字替換（TTS 發音）**：修正兩岸聲調差異與常見破音字，確保 CosyVoice 讀出標準台灣發音：
-   * 「倒**垃圾**」➔ 替換為 `勒瑟`（精確發音 `lèsè`，避免唸成 `lājī`）
-   * 「**我和你**」➔ 替換為 `我汗你`（精確發音 `wǒ hàn nǐ`）
-   * 「**品質**」➔ 替換為 `品直`（二聲 `zhí`）
-   * 「**企業**」➔ 替換為 `氣業`（四聲 `qì`）
-   * 「**星期**」➔ 替換為 `星旗`（二聲 `qí`）
-   * 「**微糖**」➔ 替換為 `為糖`（二聲 `wéi`）
+   * 「倒**垃圾**」→ 替換為 `勒瑟`（精確發音 `lèsè`，避免唸成 `lājī`）
+   * 「**我和你**」→ 替換為 `我汗你`（精確發音 `wǒ hàn nǐ`）
+   * 「**品質**」→ 替換為 `品直`（二聲 `zhí`）
+   * 「**企業**」→ 替換為 `氣業`（四聲 `qì`）
+   * 「**星期**」→ 替換為 `星旗`（二聲 `qí`）
+   * 「**微糖**」→ 替換為 `為糖`（二聲 `wéi`）
 
 ## 地端 LLM（`--backend local`）
 
@@ -219,7 +219,7 @@ LD_LIBRARY_PATH="$P/bin" "$P/bin/llama-server" \
   -ngl 8 -c 4096 -np 1 -fa on --no-webui
 
 # 另一個終端機
-~/CosyVoice/.venv/bin/python voice_loop.py --backend local
+~/voice-venv/bin/python voice_loop.py --backend local
 ```
 
 `LD_LIBRARY_PATH` 不能省，把 `build/bin` 搬走之後執行檔找不到自己的 `.so`。
@@ -349,7 +349,7 @@ repo 內附了 `assets/jinn-tiffy-10s.wav`，一段十秒的台灣中文旁白�
 
 ```bash
 cd ~/voice-loop
-~/CosyVoice/.venv/bin/python voice_loop.py --voice assets/jinn-tiffy-10s.wav
+~/voice-venv/bin/python voice_loop.py --voice assets/jinn-tiffy-10s.wav
 ```
 
 逐字稿不必自己給。`--voice` 會先找**同名的 `.txt`**（這裡是 `assets/jinn-tiffy-10s.txt`），
@@ -361,9 +361,9 @@ Tiffy 只是其中一個選項，不會被蓋掉。`assets/` 想放幾支就放�
 ```bash
 cp 我的聲音.wav 我的聲音.txt assets/     # 多一個選項，Tiffy 還在
 
-~/CosyVoice/.venv/bin/python voice_loop.py --voice assets/jinn-tiffy-10s.wav   # Tiffy
-~/CosyVoice/.venv/bin/python voice_loop.py --voice assets/我的聲音.wav          # 你自己
-~/CosyVoice/.venv/bin/python voice_loop.py                                     # 不挑,用你當下講的那句
+~/voice-venv/bin/python voice_loop.py --voice assets/jinn-tiffy-10s.wav   # Tiffy
+~/voice-venv/bin/python voice_loop.py --voice assets/我的聲音.wav          # 你自己
+~/voice-venv/bin/python voice_loop.py                                     # 不挑,用你當下講的那句
 ```
 
 `--voice` 和 `--record-voice` 都會自動快取聲紋，每輪合成少 1.5 秒（見上面「合成要更快」）。
