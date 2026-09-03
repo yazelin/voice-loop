@@ -6,9 +6,9 @@
 想固定成別的聲音就給 --voice。
 
 跑法（必須用 CosyVoice 那個 venv）：
-  ~/CosyVoice/.venv/bin/python voice_loop.py
-  ~/CosyVoice/.venv/bin/python voice_loop.py --voice ~/cosy-narrator/assets/jinn-tiffy-10s.wav
-  ~/CosyVoice/.venv/bin/python voice_loop.py --input some.wav   # 不用麥克風，跑一輪就結束
+  ~/voice-venv/bin/python voice_loop.py
+  ~/voice-venv/bin/python voice_loop.py --voice ~/cosy-narrator/assets/jinn-tiffy-10s.wav
+  ~/voice-venv/bin/python voice_loop.py --input some.wav   # 不用麥克風，跑一輪就結束
   python3 voice_loop.py --selfcheck                             # 不載模型的自我檢查
 """
 import argparse
